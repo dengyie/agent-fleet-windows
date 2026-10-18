@@ -1,0 +1,480 @@
+#!/usr/bin/env python3
+"""tools/agent-runner.py — agent 侧任务执行器（push/pull-only）
+
+主循环：poll → lease → worktree → adapter → heartbeat → result。
+runner 主动出站 HTTPS；hub 不反向连接。崩溃安全：lease 过期由 hub 重派。
+
+用法:
+  python3 tools/agent-runner.py [--config ~/.config/agent-fleet/runner.yaml]
+                                [--once] [--interval 15]
+"""
+import json
+import logging
+import sys
+import threading
+import time
+from collections import deque
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+
+def _bootstrap_direct_imports():
+    """LaunchAgent / 裸脚本直跑：把 repo root 挂到 sys.path[0]。
+
+    plist 无 WorkingDirectory、repo root 不在 sys.path。repo root 上的
+    ``agent_profiles``（tools.runner_config 依赖）与 ``report_schema``
+    （tools.supervisor.supervisor 顶层 import）若解析不到，后者发生在
+    任务认领 *之后* —— hub 侧表现为 leased 永无 result、lease 过期重派、
+    循环认领（2026-09-16 卡点 B root cause）。root 置于 sys.path[0] 后
+    （常规包优先于 sys.path 后位），上述 import 与 ``from tools import ...``
+    全部可达，无需逐模块手工注册。
+    """
+    if __package__ not in (None, ""):
+        return
+    root = Path(__file__).resolve().parent.parent
+    # Direct scripts put tools/ first, where platform/ shadows the stdlib.
+    # Keep only the package root on sys.path, as Python -m already does.
+    sys.path[:] = [entry for entry in sys.path if Path(entry).resolve() != root / 'tools']
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+
+_bootstrap_direct_imports()
+
+from tools import adapters, result_files, runner_config, worktree
+from tools.transport import Transport
+
+USER_AGENT = "agent-fleet-runner/1.0"
+MAX_BACKOFF_S = 60
+MIN_BACKOFF_S = 5
+# heartbeat 日志上传约束：≤MAX_LOG_LINES 行 × ≤MAX_LOG_LINE_CHARS 字符（与 hub 一致）
+MAX_LOG_LINES = 50
+MAX_LOG_LINE_CHARS = 500
+
+#: 诊断日志：常驻模式写 cache_dir/runner.log（RotatingFileHandler 512KB×2），
+#: --once 模式写 stderr。文件 IO 一律 UTF-8（Windows GBK locale 教训）。
+log = logging.getLogger("agent-fleet.runner")
+log.addHandler(logging.NullHandler())
+
+
+def _setup_logging(cfg, resident: bool) -> None:
+    """装配诊断日志输出目标（main 在 load_config 之后调用一次）。"""
+    for handler in list(log.handlers):
+        log.removeHandler(handler)
+        handler.close()
+    log.setLevel(logging.INFO)
+    if resident:
+        cfg.cache_dir.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(cfg.cache_dir / "runner.log",
+                                      maxBytes=512 * 1024, backupCount=2,
+                                      encoding="utf-8")
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(message)s"))
+    else:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    log.addHandler(handler)
+
+
+class RunnerPollError(RuntimeError):
+    """轮询请求传输层失败（post_json 返回 status 0）——本轮拿不到任务，应退避。"""
+
+
+def _bounded_log_lines(lines, max_lines=MAX_LOG_LINES, max_chars=MAX_LOG_LINE_CHARS):
+    """发送防线：最多 max_lines 行、每行最多 max_chars 字符。
+
+    生产者侧 _LogBuffer 已用 deque(maxlen) + 截断保证，此处双保险，
+    防御未来调用方/线程抖动直接把超限 payload 送到 hub（50 行 × 500 字符约束）。
+    """
+    out = []
+    for line in lines[-max_lines:]:
+        line = str(line)
+        if len(line) > max_chars:
+            line = line[:max_chars]
+        out.append(line)
+    return out
+
+
+class _LogBuffer:
+    """有界日志缓冲：入队每行截断到 MAX_LOG_LINE_CHARS 字符，仅保留最新 MAX_LOG_LINES 行。
+
+    供 heartbeat 每次上传抽样；旧行直接丢弃，保证任何时刻缓冲 ≤50 行 × 500 字符。
+    thread-safe：适配器 stdout 线程 enqueue，heartbeat 线程 drain。
+    """
+
+    def __init__(self, max_lines=MAX_LOG_LINES, max_chars=MAX_LOG_LINE_CHARS):
+        self._max_chars = max_chars
+        self._lines = deque(maxlen=max_lines)
+        self._lock = threading.Lock()
+
+    def enqueue(self, line):
+        line = str(line)
+        if len(line) > self._max_chars:
+            line = line[:self._max_chars]
+        with self._lock:
+            self._lines.append(line)
+
+    def drain(self):
+        with self._lock:
+            lines = list(self._lines)
+            self._lines.clear()
+        return lines
+
+
+def post_json(cfg, path, body, timeout=15):
+    """POST JSON 到 hub；网络异常返回 (0, {...}) 不抛。
+
+    出站策略由 cfg.transport（tools/transport.Transport，auto 模式）承载：
+    直连被 CF 边缘拦截（403 error code: 101x）或传输失败时回退系统代理。
+    body 只在此处经 transport 序列化一次。
+    """
+    if cfg.transport is None:
+        cfg.transport = Transport()
+    headers = {
+        "Content-Type": "application/json",
+        "X-Runner-Credential": f"{cfg.machine}:{cfg.credential}",
+        "User-Agent": USER_AGENT,
+    }
+    return cfg.transport.post_json(cfg.hub + path, body, headers, timeout=timeout)
+
+
+def _pending_dir(cfg):
+    d = cfg.cache_dir / "pending"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def flush_pending(cfg):
+    """重传上次失败的结果（attempt_id 幂等，重复提交安全）。
+
+    损坏的 pending 文件（半写/截断）无法重放，记录后丢弃，避免每轮 poll
+    无声重试；重传失败保留文件并打到 stderr，保证结果送达可观测。
+    """
+    for f in sorted(_pending_dir(cfg).glob("*.json")):
+        try:
+            body = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            log.warning("pending 结果损坏，丢弃 %s: %s", f.name, exc)
+            try:
+                f.unlink()
+            except OSError as exc2:
+                log.error("pending 文件删除失败 %s: %s", f.name, exc2)
+            continue
+        try:
+            status, _ = post_json(cfg, f"/api/commands/{body['attempt_id']}/result", body)
+            if status in (200, 409):  # 409 = lease 已失效但结果已记录/任务已重派
+                f.unlink()
+        except Exception as exc:
+            log.warning("pending 重传失败 %s: %s: %s",
+                        f.name, type(exc).__name__, exc)
+
+
+def _submit_result(cfg, attempt_id, nonce, result, diff_stat, duration_s,
+                   files=None, diff_patch=None, test_summary=None):
+    body = {
+        "attempt_id": attempt_id, "nonce": nonce, "exit_code": result.exit_code,
+        "log_summary": result.log_tail, "diff_stat": diff_stat,
+        "duration_s": round(duration_s, 1),
+    }
+    if files:
+        body["files"] = files
+    if diff_patch:
+        body["diff_patch"] = diff_patch
+    if test_summary:
+        body["test_summary"] = test_summary
+    status, _ = post_json(cfg, f"/api/commands/{attempt_id}/result", body)
+    if status != 200:
+        (_pending_dir(cfg) / f"{attempt_id}.json").write_text(
+            json.dumps(body, ensure_ascii=False), encoding="utf-8")
+    return status
+
+
+def _bf_supervisor():
+    """Lazily expose tools.supervisor (only when managed mode is opted in)."""
+    from tools.supervisor import supervisor as _s
+    return _s
+
+
+def _opaque(prefix):
+    import secrets
+    return f"{prefix}_{secrets.token_hex(8)}"
+
+
+def run_task_managed(cfg, task, supervisor):
+    """Run one leased task through the Agent Supervisor managed path.
+
+    Spawns the allowlisted CLI via ``Supervisor.launch`` into its own process
+    group, streams bounded lines through the same ``_LogBuffer``/heartbeat
+    machinery, and submits the result through the identical ``_submit_result``
+    contract as the legacy path.  Cancellation/abort is never a shell command:
+    the supervisor only pauses / terminate the owned group.
+    """
+    project = cfg.projects.get(task["project"])
+    if project is None:
+        result = adapters.AdapterResult(
+            exit_code=126, log_tail=f"项目 {task['project']} 不在 runner 白名单")
+        _submit_result(cfg, task["attempt_id"], task["nonce"], result,
+                       "", 0.0)
+        return {"exit_code": 126}
+
+    wt = None
+    capture = None
+    log_buffer = _LogBuffer()
+    lease_lost = threading.Event()
+    # bounded running tail for the final log_summary (mirrors adapter contract)
+    tail_rows = []
+    tail_bytes = [0]
+    MAX_TAIL = 10240
+
+    def on_line(line):
+        log_buffer.enqueue(line)
+        if capture is not None:
+            capture.line(line)
+        if len(line) > 500:
+            line = line[:500]
+        tail_rows.append(line)
+        tail_bytes[0] += len(line) + 1
+        while tail_bytes[0] > MAX_TAIL and tail_rows:
+            tail_bytes[0] -= len(tail_rows.pop(0)) + 1
+
+    def heartbeat_loop():
+        while not lease_lost.wait(cfg.heartbeat_interval_s):
+            lines = _bounded_log_lines(log_buffer.drain())
+            status, _ = post_json(cfg, f"/api/commands/{task['attempt_id']}/heartbeat",
+                                  {"nonce": task["nonce"], "log_lines": lines})
+            if status == 409:
+                lease_lost.set()
+                return
+
+    started = time.monotonic()
+    try:
+        wt = worktree.create_worktree(project, task["task_id"])
+        agent_cfg = cfg.agents.get(task["agent_type"], {})
+        command = adapters.create(task["agent_type"], command=agent_cfg.get("command")).command
+        timeout_s = agent_cfg.get("timeout_s", 1800)
+        if not command:
+            result = adapters.AdapterResult(
+                exit_code=127, log_tail="managed: adapter 未配置 command")
+            _submit_result(cfg, task["attempt_id"], task["nonce"], result,
+                           "", time.monotonic() - started)
+            return {"exit_code": 127}
+
+        argv = list(command)
+        if "{instruction}" in argv:
+            argv = [str(task["instruction"]) if c == "{instruction}" else c
+                    for c in argv]
+        else:
+            argv = argv + [str(task["instruction"])]
+
+        from tools.session.runner_capture import RunnerCapture, session_prefix
+        manifest = supervisor.launch(
+            agent=task.get("agent_type", "unknown"),
+            command=argv,
+            cwd=str(wt),
+            env_allowlist={},
+            session_id=session_prefix(cfg.machine) + task["attempt_id"],
+            attempt_id=task["attempt_id"],
+        )
+        capture = RunnerCapture(cfg, task, post_json, process_group_id=manifest.process_group_id)
+        capture.start_upload()
+        hb = threading.Thread(target=heartbeat_loop,
+                              name="lease-heartbeat", daemon=True)
+        hb.start()
+        result = supervisor.wait_session(
+            manifest.session_id,
+            timeout_s=timeout_s,
+            on_line=on_line,
+            should_abort=lambda: lease_lost.is_set() or bool(capture.error),
+        )
+        # map ManagedRunResult onto AdapterResult shape for the identical
+        # _submit_result contract
+        adapter_result = adapters.AdapterResult(
+            exit_code=result.exit_code,
+            log_tail="\n".join(tail_rows),
+            timed_out=result.timed_out,
+            aborted=result.aborted,
+        )
+        lease_lost.set()
+        hb.join(timeout=20)
+        if capture.error:
+            adapter_result = adapters.AdapterResult(exit_code=125, log_tail="Conversation capture failed: " + capture.error)
+        capture.finish(adapter_result.exit_code)
+        diff = worktree.diff_stat(wt) if wt is not None else ""
+        duration = time.monotonic() - started
+        snapshot = result_files.collect_result_files(wt) if wt is not None else []
+        patch = ""
+        summary = None
+        if wt is not None:
+            patch, _ = result_files.redact_patch(worktree.diff_patch(wt))
+            summary = result_files.collect_test_summary(wt)
+        _submit_result(cfg, task["attempt_id"], task["nonce"],
+                       adapter_result, diff, duration, files=snapshot,
+                       diff_patch=patch or None, test_summary=summary)
+        return {"exit_code": adapter_result.exit_code}
+    except Exception as exc:
+        lease_lost.set()
+        result = adapters.AdapterResult(
+            exit_code=125, log_tail=f"runner 内部错误: {type(exc).__name__}: {exc}"[:500])
+        _submit_result(cfg, task["attempt_id"], task["nonce"],
+                       result, "", time.monotonic() - started)
+        return {"exit_code": 125}
+    finally:
+        lease_lost.set()
+        if capture is not None:
+            capture.stop_upload()
+            capture.bridge.close()
+        if wt is not None:
+            worktree.cleanup_worktree(project, wt, task["task_id"])
+
+
+def run_task(cfg, task):
+    """执行一个已领取的任务。返回 {"exit_code", ...} 摘要。
+
+    task["project"] 必须命中 cfg.projects 绝对路径白名单，否则拒绝（exit_code 126）。
+    每任务使用 worktree.create_worktree 隔离；heartbeat 线程在 adapter 执行期间续约，
+    409 视为 lease 失效并中止 adapter；最终结果含 nonce 与有界 log/diff，提交失败缓存到 pending。
+    """
+    task_id = task["task_id"]
+    attempt_id = task["attempt_id"]
+    nonce = task["nonce"]
+    started = time.monotonic()
+
+    project = cfg.projects.get(task["project"])
+    if project is None:
+        result = adapters.AdapterResult(
+            exit_code=126, log_tail=f"项目 {task['project']} 不在 runner 白名单")
+        _submit_result(cfg, attempt_id, nonce, result, "", 0.0)
+        return {"exit_code": 126}
+
+    wt = None
+    capture = None
+    # 有界日志缓冲：入队截断 ≤500 字符/行，仅保留最新 50 行 ——
+    # heartbeat 上传恒 ≤50 行 × 500 字符（与 hub 契约一致，旧行安全丢弃）。
+    log_buffer = _LogBuffer()
+    lease_lost = threading.Event()
+
+    def on_line(line):
+        log_buffer.enqueue(line)
+        if capture is not None:
+            capture.line(line)
+
+    def heartbeat_loop():
+        while not lease_lost.wait(cfg.heartbeat_interval_s):
+            lines = _bounded_log_lines(log_buffer.drain())
+            status, _ = post_json(cfg, f"/api/commands/{attempt_id}/heartbeat",
+                                  {"nonce": nonce, "log_lines": lines})
+            if status == 409:
+                lease_lost.set()  # adapter 将在 1s 内被 should_abort 终止
+                return
+
+    try:
+        from tools.session.runner_capture import RunnerCapture
+        capture = RunnerCapture(cfg, task, post_json)
+        capture.start_upload()
+        wt = worktree.create_worktree(project, task_id)
+        agent_cfg = cfg.agents.get(task["agent_type"], {})
+        adapter = adapters.create(task["agent_type"],
+                                  command=agent_cfg.get("command"),
+                                  timeout_s=agent_cfg.get("timeout_s", 1800))
+        hb = threading.Thread(target=heartbeat_loop, name="lease-heartbeat", daemon=True)
+        hb.start()
+        result = adapter.run(task["instruction"], wt, on_line=on_line,
+                             should_abort=lambda: lease_lost.is_set() or bool(capture.error))
+        lease_lost.set()  # 停 heartbeat 线程
+        hb.join(timeout=20)
+        if capture.error:
+            result = adapters.AdapterResult(exit_code=125, log_tail="Conversation capture failed: " + capture.error)
+        capture.finish(result.exit_code)
+        diff = worktree.diff_stat(wt)
+        duration = time.monotonic() - started
+        snapshot = result_files.collect_result_files(wt)
+        patch, _ = result_files.redact_patch(worktree.diff_patch(wt))
+        summary = result_files.collect_test_summary(wt)
+        _submit_result(cfg, attempt_id, nonce, result, diff, duration,
+                       files=snapshot, diff_patch=patch or None,
+                       test_summary=summary)
+        return {"exit_code": result.exit_code}
+    except Exception as exc:
+        lease_lost.set()
+        result = adapters.AdapterResult(
+            exit_code=125, log_tail=f"runner 内部错误: {type(exc).__name__}: {exc}"[:500])
+        _submit_result(cfg, attempt_id, nonce, result, "", time.monotonic() - started)
+        return {"exit_code": 125}
+    finally:
+        lease_lost.set()
+        if capture is not None:
+            capture.stop_upload()
+            capture.bridge.close()
+        if wt is not None:
+            worktree.cleanup_worktree(project, wt, task_id)
+
+
+def poll_once(cfg):
+    """单轮：先重传缓存结果，再 poll；有任务则执行。返回是否有任务。
+
+    轮询请求网络失败（post_json 返回 status 0）抛 RunnerPollError，
+    由 main() 转为指数退避——这是全局 5s→60s 退避约束的实现点。
+    """
+    from tools.session.runner_capture import replay_pending
+    replay_pending(cfg, post_json)
+    flush_pending(cfg)
+    status, data = post_json(cfg, "/api/commands/poll", {"runner_id": cfg.runner_id})
+    if status == 0:
+        raise RunnerPollError(str(data.get("error", "网络不可达")))
+    if status != 200 or not data.get("ok"):
+        return False
+    task = data.get("task")
+    if not task:
+        return False
+    if cfg.managed_enabled:
+        run_task_managed(cfg, task, _bf_supervisor().Supervisor(
+            manifest_dir=cfg.supervisor_manifest_dir,
+            machine_id=cfg.machine))
+    else:
+        run_task(cfg, task)
+    return True
+
+
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(description="agent-fleet runner（pull-only 任务执行器）")
+    parser.add_argument("--config", default=str(runner_config.DEFAULT_CONFIG_PATH))
+    parser.add_argument("--once", action="store_true", help="单轮执行（cron 模式）")
+    parser.add_argument("--interval", type=int, default=None, help="常驻轮询间隔秒")
+    args = parser.parse_args(argv)
+
+    cfg = runner_config.load_config(args.config)
+    interval = args.interval or cfg.poll_interval_s
+
+    resident = not args.once
+    _setup_logging(cfg, resident=resident)
+
+    if args.once:
+        try:
+            poll_once(cfg)
+        except RunnerPollError as exc:
+            log.error("hub 不可达: %s", exc)
+        return 0
+
+    backoff = MIN_BACKOFF_S
+    while True:
+        try:
+            did_work = poll_once(cfg)
+            backoff = MIN_BACKOFF_S  # poll 成功（含空任务）→ 重置退避
+            if not did_work:
+                time.sleep(interval)
+        except RunnerPollError as exc:
+            # 网络失败：保留/递增 backoff，5s→60s 上限
+            log.warning("hub 不可达，%ds 后重试: %s", backoff, exc)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, MAX_BACKOFF_S)
+        except KeyboardInterrupt:
+            return 0
+        except Exception:
+            log.exception("轮询异常")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, MAX_BACKOFF_S)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
