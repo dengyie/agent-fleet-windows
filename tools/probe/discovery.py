@@ -37,6 +37,7 @@ from datetime import datetime
 from typing import Any, Iterator
 
 from agent_profiles import OBSERVABLE_AGENT_TYPES, PROFILES
+from tools.local_process import run as run_local
 
 # ---------------------------------------------------------------------------
 # fixed boundaries (schema boundary for Task 1)
@@ -134,10 +135,11 @@ _last_enumerate_failed: bool = False
 # bounded local subprocess helpers
 # ---------------------------------------------------------------------------
 
+
 def _run_ps(argv: list[str], timeout: float = PS_TIMEOUT_S) -> str:
     """Run one bounded local ``ps``; returns stdout, or ``""`` on any failure."""
     try:
-        result = subprocess.run(
+        result = run_local(
             ["ps", *argv],
             capture_output=True,
             stdin=subprocess.DEVNULL,
@@ -161,7 +163,7 @@ def _run_powershell_json(script: str, timeout: float = POWERSHELL_TIMEOUT_S):
                   or shutil.which("powershell") or "powershell.exe")
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     try:
-        result = subprocess.run(
+        result = run_local(
             [executable, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
             capture_output=True,
             stdin=subprocess.DEVNULL,
@@ -180,7 +182,14 @@ def _run_powershell_json(script: str, timeout: float = POWERSHELL_TIMEOUT_S):
 
 
 def _enumerate_windows_process_rows() -> list[ProcRow] | None:
-    """Read matching Windows processes through the built-in CIM provider."""
+    """Read matching Windows processes through the built-in CIM provider.
+
+    ``Win32_Process.GetOwner`` is a per-process RPC and is unexpectedly slow
+    on this host (dozens of calls can exceed the discovery timeout).  Run it
+    only after a narrow CLI candidate filter so unrelated Electron/browser
+    helpers are neither queried nor treated as agent CLIs.  The owner value
+    remains necessary for same-user attachability checks.
+    """
     script = r'''
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -189,8 +198,13 @@ $rows = @(
     Where-Object {
       $name = [string]$_.Name
       $cmd = [string]$_.CommandLine
-      $name -match '(?i)^(codex|claude|zcode|hermes|pi)(\.exe)?$' -or
-        $cmd -match '(?i)(codex|claude|zcode|hermes|opencode|aider|astrabot|openclaw)'
+      $direct = $name -match '(?i)^(codex|codex-cli|claude|hermes|pi|zcode|opencode|aider|astrabot|openclaw)(\.exe)?$'
+      $interpreter = $name -match '(?i)^(node|python|python3|bun|deno|npm|npx)(\.exe)?$'
+      $script_cli = $cmd -match '(?i)(^|[\\/ "])(codex|claude|zcode|hermes|opencode|aider|astrabot|openclaw)(\.c?js|\.py)?([ "]|$)'
+      # ZCode's desktop launcher and Electron children share ZCode.exe.  Only
+      # keep its CLI forms, whose command line names the bundled zcode.cjs.
+      ($direct -and (($name -notmatch '(?i)^zcode(\.exe)?$') -or
+        ($cmd -match '(?i)zcode\.cjs'))) -or ($interpreter -and $script_cli)
     } |
     ForEach-Object {
       $user = ''

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from hub.domain.task_result import MAX_DIFF_PATCH, bound_patch
 from tools.bounded_process import run_bounded
+from tools.local_process import NO_WINDOW
 
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DIFF_TIMEOUT_S = 60.0
@@ -22,7 +23,7 @@ def _git(project: Path, *args, check=True):
     try:
         proc = subprocess.run(["git", *args], cwd=str(project),
                               capture_output=True, text=True, errors="replace",
-                              timeout=60)
+                              timeout=60, creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired:
         raise WorktreeError(f"git {' '.join(args)} 超时")
     if check and proc.returncode != 0:

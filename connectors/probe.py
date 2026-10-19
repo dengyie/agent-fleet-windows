@@ -5,7 +5,11 @@ machine where this context is created and only returns bounded stdout.
 """
 
 import subprocess
+import sys
 from pathlib import Path
+
+from tools.local_process import resolve_bash
+from tools.local_process import run as run_local
 
 FLEET_HOME = Path(__file__).resolve().parent.parent
 
@@ -20,30 +24,38 @@ class ProbeContext:
         self.inner_reachable = True
 
     def run(self, cmd):
+        shell = resolve_bash()
+        if shell is None:
+            return ""
         try:
-            result = subprocess.run(
-                ["bash", "-c", cmd],
+            result = run_local(
+                [shell, "-c", cmd],
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
                 cwd=str(FLEET_HOME),
             )
-            return result.stdout.strip()
-        except (subprocess.TimeoutExpired, OSError):
+            return (result.stdout or "").strip()
+        except (subprocess.TimeoutExpired, OSError, subprocess.SubprocessError,
+                ValueError):
             return ""
 
     def run_python(self, script):
+        # sys.executable, not "python3": on Windows the bare name resolves to
+        # the Microsoft Store redirector, which prints a non-ASCII "not found"
+        # notice and exits non-zero instead of running the script.
         try:
-            result = subprocess.run(
-                ["python3", "-"],
+            result = run_local(
+                [sys.executable, "-"],
                 input=script,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout + 5,
                 cwd=str(FLEET_HOME),
             )
-            return result.stdout
-        except (subprocess.TimeoutExpired, OSError):
+            return result.stdout or "{}"
+        except (subprocess.TimeoutExpired, OSError, subprocess.SubprocessError,
+                ValueError):
             return "{}"
 
     def run_batch(self, cmds):
@@ -57,4 +69,7 @@ class ProbeContext:
         return {"ok": False, "message": "push-only 模式不提供远程进程控制"}
 
     def tmux_send(self, session, cmd):
+        return {"ok": False, "message": "push-only 模式不提供远程进程控制"}
+
+    def control_exec(self, cmd):
         return {"ok": False, "message": "push-only 模式不提供远程进程控制"}

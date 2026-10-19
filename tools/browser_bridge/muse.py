@@ -12,6 +12,8 @@ import sqlite3
 import subprocess
 from typing import Any, Mapping, Protocol
 
+from tools.local_process import NO_WINDOW
+
 MAX_PROMPT = 8192
 MAX_MESSAGES = 100
 MAX_MESSAGE_TEXT = 12288
@@ -38,8 +40,10 @@ class SubprocessMuseTransport:
         try:
             process = subprocess.run(
                 ['node', str(Path(__file__).with_name('cdp_muse.cjs'))],
-                input=json.dumps({'op': operation, **kwargs}, ensure_ascii=False), encoding='utf-8',
+                input=json.dumps({'op': operation, **kwargs}, ensure_ascii=False),
+                encoding='utf-8', errors='replace',
                 capture_output=True, timeout=20, check=False,
+                creationflags=NO_WINDOW,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise MuseBridgeError('bridge_unavailable') from exc

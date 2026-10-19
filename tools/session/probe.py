@@ -51,6 +51,7 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Pattern, Sequence
 
+from tools.local_process import NO_WINDOW
 from tools.session.probes import claude, codex, hermes, pi
 
 DEFAULT_TIMEOUT_S = 8.0
@@ -299,8 +300,10 @@ def _run_binary(
             cwd=_probe_cwd(),
             env=env,
             text=True,
+            errors="replace",
             timeout=timeout_s,
             check=False,
+            creationflags=NO_WINDOW,
         )
     except FileNotFoundError:
         return "missing", ""

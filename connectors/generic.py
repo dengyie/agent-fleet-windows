@@ -95,6 +95,9 @@ print(json.dumps({"processes": procs[:15], "recent_logs": logs[:5],
             pat = kwargs.get("pattern", self.pattern)
             return ctx.restart_process(pat)
         if action == "exec":
-            cmd = kwargs.get("cmd", "")
-            return ctx.run(cmd)
+            # 与 kill_gateway/restart_process 一致：push-only 探针拒绝远程执行
+            handler = getattr(ctx, "control_exec", None)
+            if handler is None:
+                return {"ok": False, "message": "push-only 模式不提供远程进程控制"}
+            return handler(kwargs.get("cmd", ""))
         return {"ok": False, "message": f"{self.TYPE} 不支持 action={action}"}

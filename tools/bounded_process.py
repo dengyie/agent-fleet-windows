@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
+from tools import local_process
+
 
 def decode_prefix(raw: bytes, limit: int) -> tuple[str, bool]:
     """Preserve valid text while counting replacement characters in the budget."""
@@ -75,7 +77,7 @@ def run_bounded(argv: Sequence[str], *, cwd: Path, timeout_s: float,
     if not math.isfinite(timeout_s) or timeout_s <= 0:
         raise ValueError("invalid_process_timeout")
     deadline = time.monotonic() + timeout_s
-    with subprocess.Popen(list(argv), cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+    with local_process.popen(list(argv), cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                           stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT if stderr_limit is None else subprocess.PIPE,
                           start_new_session=True, preexec_fn=preexec_fn) as proc:

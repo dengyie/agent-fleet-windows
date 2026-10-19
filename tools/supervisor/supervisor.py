@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from report_schema import INSTANCE_FAMILIES
+from tools.local_process import NO_WINDOW
 
 from tools.supervisor.model import (
     GROUP_CAPABILITY_CGROUP,
@@ -216,6 +217,7 @@ class POSIXGroupOps(GroupOps):
                 close_fds=True,
                 restore_signals=True,
                 bufsize=0,
+                creationflags=NO_WINDOW,
             )
         except OSError:
             raise GroupError("spawn_failed")
@@ -429,7 +431,7 @@ class WindowsGroupOps(GroupOps):
         return isinstance(handle, _AttachedHandle)
 
     def create(self, argv, cwd, env):
-        flags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200))
+        flags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)) | NO_WINDOW
         try:
             proc = subprocess.Popen(
                 list(argv),
@@ -541,6 +543,23 @@ class WindowsGroupOps(GroupOps):
                     ("szExeFile", wintypes.WCHAR * 260),
                 ]
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateToolhelp32Snapshot.argtypes = [
+                wintypes.DWORD,
+                wintypes.DWORD,
+            ]
+            kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+            kernel32.Process32FirstW.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(PROCESSENTRY32W),
+            ]
+            kernel32.Process32FirstW.restype = wintypes.BOOL
+            kernel32.Process32NextW.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(PROCESSENTRY32W),
+            ]
+            kernel32.Process32NextW.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
             snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
             if snapshot == wintypes.HANDLE(-1).value:
                 return [root]
@@ -579,7 +598,19 @@ class WindowsGroupOps(GroupOps):
             import ctypes
             from ctypes import wintypes
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [
+                wintypes.DWORD,
+                wintypes.BOOL,
+                wintypes.DWORD,
+            ]
             kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.WaitForSingleObject.argtypes = [
+                wintypes.HANDLE,
+                wintypes.DWORD,
+            ]
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
             handle = kernel32.OpenProcess(0x00100000, False, int(pid))  # SYNCHRONIZE
             if not handle:
                 return False
@@ -605,7 +636,7 @@ class WindowsGroupOps(GroupOps):
         try:
             result = subprocess.run(argv, capture_output=True,
                                     stdin=subprocess.DEVNULL, timeout=8,
-                                    check=False)
+                                    check=False, creationflags=NO_WINDOW)
         except (OSError, subprocess.SubprocessError, ValueError):
             return False
         return result.returncode == 0
@@ -620,12 +651,20 @@ class WindowsGroupOps(GroupOps):
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
             ntdll = ctypes.WinDLL("ntdll")
             access = 0x0800 | 0x0400 | 0x1000  # suspend/query/synchronize
+            kernel32.OpenProcess.argtypes = [
+                wintypes.DWORD,
+                wintypes.BOOL,
+                wintypes.DWORD,
+            ]
             kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
             handle = kernel32.OpenProcess(access, False, int(pid))
             if not handle:
                 return False
             try:
                 fn = ntdll.NtResumeProcess if resume else ntdll.NtSuspendProcess
+                fn.argtypes = [wintypes.HANDLE]
                 fn.restype = ctypes.c_long
                 return int(fn(handle)) == 0
             finally:
@@ -1868,8 +1907,8 @@ def _live_process_cwd(pid: int) -> str | None:
     try:
         completed = subprocess.run(
             [lsof, "-a", "-p", str(pid_i), "-d", "cwd", "-Fn"],
-            capture_output=True, text=True, timeout=2,
-            stdin=subprocess.DEVNULL, check=False,
+            capture_output=True, text=True, errors="replace", timeout=2,
+            stdin=subprocess.DEVNULL, check=False, creationflags=NO_WINDOW,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

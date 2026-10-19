@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from tools import local_process
+
 MAX_LOG_TAIL = 10240
 MAX_LINE = 500
 
@@ -57,7 +59,7 @@ class BaseAdapter:
                     pass
 
         try:
-            proc = subprocess.Popen(
+            proc = local_process.popen(
                 argv, cwd=str(workdir),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, errors="replace",
