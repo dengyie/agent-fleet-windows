@@ -132,3 +132,27 @@ def test_resolve_bash_honours_override(tmp_path, monkeypatch):
     shell.write_text("", encoding="utf-8")
     monkeypatch.setenv("AGENT_FLEET_BASH", str(shell))
     assert local_process.resolve_bash() == str(shell)
+
+
+def test_resolve_bash_is_memoised(monkeypatch):
+    # Every probe cycle asks for the shell repeatedly; resolving it rescans the
+    # whole PATH, so the answer must be remembered rather than re-derived.
+    scans = []
+    real_which = local_process.shutil.which
+
+    def counting_which(name, path=None):
+        scans.append(name)
+        return real_which(name, path=path)
+
+    monkeypatch.setattr(local_process.shutil, "which", counting_which)
+    monkeypatch.setenv("AGENT_FLEET_BASH", "")
+    local_process.resolve_bash.cache_clear()
+    try:
+        local_process.resolve_bash()
+        after_first = len(scans)
+        local_process.resolve_bash()
+        assert len(scans) == after_first, "PATH re-scanned on a repeated call"
+        if sys.platform == "win32":
+            assert after_first > 0, "the first call must actually look for a shell"
+    finally:
+        local_process.resolve_bash.cache_clear()

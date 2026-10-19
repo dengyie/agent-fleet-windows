@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from functools import lru_cache
 
 # 0 on POSIX, where the flag does not exist (and passing 0 is accepted).
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
@@ -62,17 +63,10 @@ def _non_stub_path() -> str:
     return os.pathsep.join(entries)
 
 
-def resolve_bash():
-    """Return a real POSIX shell, or ``None`` when only the WSL stub exists.
-
-    ``C:\\Windows\\System32\\bash.exe`` is the WSL launcher, not Git Bash: it
-    exits 1 and prints a UTF-16 "WSL is not installed" notice.  Treating it as
-    a shell turns every ``bash -c`` collector into a silent failure.
-    """
+@lru_cache(maxsize=8)
+def _resolve_bash_cached(override: str) -> str | None:
     if os.name != "nt":
         return "bash"
-
-    override = os.environ.get("AGENT_FLEET_BASH")
     if override and os.path.isfile(override):
         return override
 
@@ -98,3 +92,18 @@ def resolve_bash():
         if candidate and os.path.isfile(candidate) and not _is_stub_dir(candidate):
             return candidate
     return None
+
+
+def resolve_bash():
+    """Return a real POSIX shell, or ``None`` when only the WSL stub exists.
+
+    ``C:\\Windows\\System32\\bash.exe`` is the WSL launcher, not Git Bash: it
+    exits 1 and prints a UTF-16 "WSL is not installed" notice.  Treating it as
+    a shell turns every ``bash -c`` collector into a silent failure.
+    """
+    return _resolve_bash_cached(os.environ.get("AGENT_FLEET_BASH"))
+
+
+# The shell does not move while the probe runs, and the scan stats every PATH
+# entry, so callers may cache_clear when they deliberately change the lookup.
+resolve_bash.cache_clear = _resolve_bash_cached.cache_clear
