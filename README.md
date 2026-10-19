@@ -97,6 +97,8 @@ python3 tools/agent-self-report.py \
 > */2 * * * * python3 /path/to/agent-fleet/tools/agent-self-report.py --endpoint https://hub.example.com --name worker-node-1 --token "$AGENT_FLEET_INGEST_TOKEN" >/dev/null 2>&1
 > ```
 
+> **Windows 节点发版来源（重要）**：本节点的权威版本化源码是私有仓库 `dengyie/agent-fleet-windows`，发版必须从该仓库执行 `deploy/package-release.sh`（`git archive HEAD`）。它与公开仓库 `dengyie/agent-fleet` 历史**无关**，后者不含 Windows 探针枚举（`tools/probe/discovery.py` 的 PowerShell 路径）；误用后者发版会移除本节点的 Windows 采集。详见 [Windows 节点源码与发版来源](docs/windows-node-source.md)。
+
 ---
 
 ### 3. 配置 Runner（可选：受控任务调度）
