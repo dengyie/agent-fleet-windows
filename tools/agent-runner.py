@@ -32,6 +32,9 @@ def _bootstrap_direct_imports():
     if __package__ not in (None, ""):
         return
     root = Path(__file__).resolve().parent.parent
+    # Direct scripts put tools/ first, where platform/ shadows the stdlib.
+    # Keep only the package root on sys.path, as Python -m already does.
+    sys.path[:] = [entry for entry in sys.path if Path(entry).resolve() != root / 'tools']
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
@@ -54,18 +57,15 @@ log = logging.getLogger("agent-fleet.runner")
 log.addHandler(logging.NullHandler())
 
 
-def _setup_logging(resident: bool, log_dir: Path) -> None:
-    """装配诊断日志输出目标（main 在解析配置后调用一次）。
-
-    log_dir 独立于 cfg 传入：配置本身加载失败时也能按默认目录留痕。
-    """
+def _setup_logging(cfg, resident: bool) -> None:
+    """装配诊断日志输出目标（main 在 load_config 之后调用一次）。"""
     for handler in list(log.handlers):
         log.removeHandler(handler)
         handler.close()
     log.setLevel(logging.INFO)
     if resident:
-        log_dir.mkdir(parents=True, exist_ok=True)
-        handler = RotatingFileHandler(log_dir / "runner.log",
+        cfg.cache_dir.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(cfg.cache_dir / "runner.log",
                                       maxBytes=512 * 1024, backupCount=2,
                                       encoding="utf-8")
         handler.setFormatter(logging.Formatter(
@@ -218,6 +218,7 @@ def run_task_managed(cfg, task, supervisor):
         return {"exit_code": 126}
 
     wt = None
+    capture = None
     log_buffer = _LogBuffer()
     lease_lost = threading.Event()
     # bounded running tail for the final log_summary (mirrors adapter contract)
@@ -227,6 +228,8 @@ def run_task_managed(cfg, task, supervisor):
 
     def on_line(line):
         log_buffer.enqueue(line)
+        if capture is not None:
+            capture.line(line)
         if len(line) > 500:
             line = line[:500]
         tail_rows.append(line)
@@ -247,7 +250,7 @@ def run_task_managed(cfg, task, supervisor):
     try:
         wt = worktree.create_worktree(project, task["task_id"])
         agent_cfg = cfg.agents.get(task["agent_type"], {})
-        command = agent_cfg.get("command")
+        command = adapters.create(task["agent_type"], command=agent_cfg.get("command")).command
         timeout_s = agent_cfg.get("timeout_s", 1800)
         if not command:
             result = adapters.AdapterResult(
@@ -263,14 +266,17 @@ def run_task_managed(cfg, task, supervisor):
         else:
             argv = argv + [str(task["instruction"])]
 
+        from tools.session.runner_capture import RunnerCapture, session_prefix
         manifest = supervisor.launch(
             agent=task.get("agent_type", "unknown"),
             command=argv,
             cwd=str(wt),
             env_allowlist={},
-            session_id=_opaque("sess"),
+            session_id=session_prefix(cfg.machine) + task["attempt_id"],
             attempt_id=task["attempt_id"],
         )
+        capture = RunnerCapture(cfg, task, post_json, process_group_id=manifest.process_group_id)
+        capture.start_upload()
         hb = threading.Thread(target=heartbeat_loop,
                               name="lease-heartbeat", daemon=True)
         hb.start()
@@ -278,7 +284,7 @@ def run_task_managed(cfg, task, supervisor):
             manifest.session_id,
             timeout_s=timeout_s,
             on_line=on_line,
-            should_abort=lease_lost.is_set,
+            should_abort=lambda: lease_lost.is_set() or bool(capture.error),
         )
         # map ManagedRunResult onto AdapterResult shape for the identical
         # _submit_result contract
@@ -289,6 +295,10 @@ def run_task_managed(cfg, task, supervisor):
             aborted=result.aborted,
         )
         lease_lost.set()
+        hb.join(timeout=20)
+        if capture.error:
+            adapter_result = adapters.AdapterResult(exit_code=125, log_tail="Conversation capture failed: " + capture.error)
+        capture.finish(adapter_result.exit_code)
         diff = worktree.diff_stat(wt) if wt is not None else ""
         duration = time.monotonic() - started
         snapshot = result_files.collect_result_files(wt) if wt is not None else []
@@ -310,6 +320,9 @@ def run_task_managed(cfg, task, supervisor):
         return {"exit_code": 125}
     finally:
         lease_lost.set()
+        if capture is not None:
+            capture.stop_upload()
+            capture.bridge.close()
         if wt is not None:
             worktree.cleanup_worktree(project, wt, task["task_id"])
 
@@ -334,6 +347,7 @@ def run_task(cfg, task):
         return {"exit_code": 126}
 
     wt = None
+    capture = None
     # 有界日志缓冲：入队截断 ≤500 字符/行，仅保留最新 50 行 ——
     # heartbeat 上传恒 ≤50 行 × 500 字符（与 hub 契约一致，旧行安全丢弃）。
     log_buffer = _LogBuffer()
@@ -341,6 +355,8 @@ def run_task(cfg, task):
 
     def on_line(line):
         log_buffer.enqueue(line)
+        if capture is not None:
+            capture.line(line)
 
     def heartbeat_loop():
         while not lease_lost.wait(cfg.heartbeat_interval_s):
@@ -352,6 +368,9 @@ def run_task(cfg, task):
                 return
 
     try:
+        from tools.session.runner_capture import RunnerCapture
+        capture = RunnerCapture(cfg, task, post_json)
+        capture.start_upload()
         wt = worktree.create_worktree(project, task_id)
         agent_cfg = cfg.agents.get(task["agent_type"], {})
         adapter = adapters.create(task["agent_type"],
@@ -360,8 +379,12 @@ def run_task(cfg, task):
         hb = threading.Thread(target=heartbeat_loop, name="lease-heartbeat", daemon=True)
         hb.start()
         result = adapter.run(task["instruction"], wt, on_line=on_line,
-                             should_abort=lease_lost.is_set)
+                             should_abort=lambda: lease_lost.is_set() or bool(capture.error))
         lease_lost.set()  # 停 heartbeat 线程
+        hb.join(timeout=20)
+        if capture.error:
+            result = adapters.AdapterResult(exit_code=125, log_tail="Conversation capture failed: " + capture.error)
+        capture.finish(result.exit_code)
         diff = worktree.diff_stat(wt)
         duration = time.monotonic() - started
         snapshot = result_files.collect_result_files(wt)
@@ -379,6 +402,9 @@ def run_task(cfg, task):
         return {"exit_code": 125}
     finally:
         lease_lost.set()
+        if capture is not None:
+            capture.stop_upload()
+            capture.bridge.close()
         if wt is not None:
             worktree.cleanup_worktree(project, wt, task_id)
 
@@ -389,6 +415,8 @@ def poll_once(cfg):
     轮询请求网络失败（post_json 返回 status 0）抛 RunnerPollError，
     由 main() 转为指数退避——这是全局 5s→60s 退避约束的实现点。
     """
+    from tools.session.runner_capture import replay_pending
+    replay_pending(cfg, post_json)
     flush_pending(cfg)
     status, data = post_json(cfg, "/api/commands/poll", {"runner_id": cfg.runner_id})
     if status == 0:
@@ -415,18 +443,11 @@ def main(argv=None):
     parser.add_argument("--interval", type=int, default=None, help="常驻轮询间隔秒")
     args = parser.parse_args(argv)
 
-    resident = not args.once
-    # pythonw / 无控制台环境下 stderr 为 None：traceback 会静默丢失，
-    # 配置失败也必须留痕（默认 cache 目录），再以非零码退出。
-    # 注意：这是唯一的 load_config 调用点——先于诊断日志装配。
-    try:
-        cfg = runner_config.load_config(args.config)
-    except Exception as exc:
-        _setup_logging(resident, runner_config.DEFAULT_CACHE_DIR)
-        log.error("配置加载失败: %s", exc)
-        return 2
+    cfg = runner_config.load_config(args.config)
     interval = args.interval or cfg.poll_interval_s
-    _setup_logging(resident, cfg.cache_dir)
+
+    resident = not args.once
+    _setup_logging(cfg, resident=resident)
 
     if args.once:
         try:

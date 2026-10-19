@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from hub.agent_fleet_guardian import AgentFleetGuardian, agent_fleet_guardian_watcher
 
 
-class TestAgentFleetGuardian(unittest.TestCase):
+class TestAgentFleetGuardian(unittest.IsolatedAsyncioTestCase):
     """Test cases for AgentFleetGuardian class."""
 
     def setUp(self):
@@ -58,6 +58,7 @@ class TestAgentFleetGuardian(unittest.TestCase):
 
         self.assertEqual(status, 200)
         mock_exec.assert_called_once()
+        self.assertEqual(mock_exec.call_args.args[-1], 'http://127.0.0.1:8790/healthz')
 
     @patch("hub.agent_fleet_guardian.asyncio.create_subprocess_exec")
     async def test_check_health_failure(self, mock_exec):
@@ -80,23 +81,20 @@ class TestAgentFleetGuardian(unittest.TestCase):
         self.assertEqual(status, 0)
 
     @patch("hub.agent_fleet_guardian.subprocess.Popen")
-    @patch("hub.agent_fleet_guardian.os.kill")
-    async def test_restart_service_success(self, mock_kill, mock_popen):
+    @patch("hub.agent_fleet_guardian.AgentFleetGuardian._stop_process_with_pidfd", new_callable=AsyncMock)
+    async def test_restart_service_success(self, stop_pidfd, mock_popen):
         """Test successful service restart."""
         # Mock old process
         self.guardian.web_pid_file.parent.mkdir(parents=True, exist_ok=True)
         self.guardian.web_pid_file.write_text("12345")
-        mock_kill.side_effect = [
-            None,  # Check old process exists
-            None,  # SIGTERM
-            ProcessLookupError(),  # Check after SIGTERM (dead)
-            None,  # Check new process exists
-        ]
+        stop_pidfd.return_value = "stopped"
 
         # Mock new process
         mock_proc = MagicMock()
         mock_proc.pid = 67890
+        mock_proc.poll.return_value = None
         mock_popen.return_value = mock_proc
+        self.guardian.process_matches = MagicMock(return_value=True)
 
         # Create hub/web.py to pass existence check
         (self.repo_root / "hub").mkdir()
@@ -106,24 +104,24 @@ class TestAgentFleetGuardian(unittest.TestCase):
 
         self.assertTrue(success)
         self.assertEqual(self.guardian.web_pid_file.read_text(), "67890")
-        self.assertEqual(mock_kill.call_count, 4)
+        stop_pidfd.assert_awaited_once_with(12345, str(self.repo_root.resolve()))
 
     @patch("hub.agent_fleet_guardian.asyncio.sleep", new_callable=AsyncMock)
     @patch("hub.agent_fleet_guardian.subprocess.Popen")
-    @patch("hub.agent_fleet_guardian.os.kill")
-    def test_restart_service_popen_uses_frontend_cutover(
-        self, mock_kill, mock_popen, _mock_sleep
+    def test_restart_service_popen_uses_api_only(
+        self, mock_popen, _mock_sleep
     ):
-        """SPA 生产必须 --frontend-cutover；缺了会掉回 SSR 总览页。"""
+        """Independent backend releases must not depend on frontend files."""
         log_dir = Path(self.temp_dir) / "logs"
         log_dir.mkdir()
         self.guardian.web_log = log_dir / "web.log"
         self.guardian.web_error_log = log_dir / "web-errors.log"
         self.guardian.web_pid_file = Path(self.temp_dir) / "web.pid"
-        mock_kill.return_value = None
         mock_proc = MagicMock()
         mock_proc.pid = 67890
+        mock_proc.poll.return_value = None
         mock_popen.return_value = mock_proc
+        self.guardian.process_matches = MagicMock(return_value=True)
         (self.repo_root / "hub").mkdir()
         (self.repo_root / "hub" / "web.py").touch()
 
@@ -133,20 +131,16 @@ class TestAgentFleetGuardian(unittest.TestCase):
         mock_popen.assert_called_once()
         argv = mock_popen.call_args[0][0]
         self.assertEqual(argv[1], "hub/web.py")
-        self.assertIn("--frontend-cutover", argv)
+        self.assertIn("--no-serve-frontend", argv)
         self.assertNotIn("--frontend-dir", argv)
 
     @patch("hub.agent_fleet_guardian.subprocess.Popen")
-    @patch("hub.agent_fleet_guardian.os.kill")
-    async def test_restart_service_process_dies(self, mock_kill, mock_popen):
+    async def test_restart_service_process_dies(self, mock_popen):
         """Test restart fails when new process dies immediately."""
         # Mock no old process
-        mock_kill.side_effect = [
-            ProcessLookupError(),  # New process check fails
-        ]
-
         mock_proc = MagicMock()
         mock_proc.pid = 67890
+        mock_proc.poll.return_value = 1
         mock_popen.return_value = mock_proc
 
         (self.repo_root / "hub").mkdir()
@@ -157,10 +151,69 @@ class TestAgentFleetGuardian(unittest.TestCase):
         self.assertFalse(success)
 
     @patch("hub.agent_fleet_guardian.subprocess.Popen")
+    @patch("hub.agent_fleet_guardian.AgentFleetGuardian._stop_process_with_pidfd", new_callable=AsyncMock)
+    async def test_restart_does_not_start_new_hub_when_pidfd_stop_fails(self, stop_pidfd, mock_popen):
+        self.guardian.web_pid_file.parent.mkdir(parents=True, exist_ok=True)
+        self.guardian.web_pid_file.write_text("12345")
+        stop_pidfd.return_value = "failed"
+
+        self.assertFalse(await self.guardian.restart_service())
+        mock_popen.assert_not_called()
+
+    @patch("hub.agent_fleet_guardian.asyncio.create_subprocess_exec")
+    async def test_pidfd_helper_receives_process_identity_contract(self, create_process):
+        from hub import agent_fleet_guardian as guardian_module
+        release_helper = guardian_module._RELEASE_ROOT / "deploy" / "hk-web-process-control.py"
+        helper_process = AsyncMock()
+        helper_process.communicate = AsyncMock(return_value=(b"stopped\n", b""))
+        helper_process.returncode = 0
+        create_process.return_value = helper_process
+
+        result = await self.guardian._stop_process_with_pidfd(
+            12345, str(guardian_module._RELEASE_ROOT)
+        )
+
+        self.assertEqual(result, "stopped")
+        args = create_process.call_args.args
+        self.assertEqual(args[1], str(release_helper))
+        self.assertEqual(args[2:4], ("12345", str(guardian_module._RELEASE_ROOT)))
+        self.assertEqual(args[4:], (str(os.getuid()), "web", "allow_existing"))
+
+    def test_guardian_accepts_previous_sibling_release_after_live_symlink_switch(self):
+        from hub import agent_fleet_guardian as guardian_module
+
+        releases = Path(self.temp_dir) / "releases"
+        old_release = releases / "old"
+        new_release = releases / "new"
+        for release in (old_release, new_release):
+            (release / "hub").mkdir(parents=True)
+            (release / "hub" / "web.py").touch()
+            (release / "RELEASE_ORIGIN").write_text("commit: fixture\n")
+        live = Path(self.temp_dir) / "live-link"
+        live.symlink_to(new_release, target_is_directory=True)
+        self.guardian.repo_root = live
+        with patch.object(guardian_module, "_RELEASE_ROOT", new_release):
+            with patch("hub.agent_fleet_guardian._proc_identity", return_value=(
+                "python3 hub/web.py --no-serve-frontend",
+                str(old_release),
+                os.getuid(),
+            )):
+                self.assertEqual(
+                    self.guardian._managed_hub_cwd(12345), str(old_release.resolve())
+                )
+
+    def test_guardian_routes_old_hub_stop_through_pidfd_helper(self):
+        source = (Path(__file__).resolve().parents[1] / "hub" / "agent_fleet_guardian.py").read_text()
+        restart = source[source.index("async def restart_service"):source.index("async def agent_fleet_guardian_watcher")]
+        self.assertIn("_stop_process_with_pidfd(old_pid, expected_cwd)", restart)
+        self.assertNotIn("os.kill(old_pid", restart)
+        self.assertIn("proc.poll()", restart)
+
+    @patch("hub.agent_fleet_guardian.subprocess.Popen")
     @patch("hub.agent_fleet_guardian.os.kill")
     async def test_restart_service_repo_not_exists(self, mock_kill, mock_popen):
         """Test restart fails when repo root doesn't exist."""
-        self.guardian.repo_root = Path("/nonexistent")
+        self.guardian.repo_root = self.repo_root / "missing-repository"
 
         success = await self.guardian.restart_service()
 
@@ -194,7 +247,7 @@ class TestAgentFleetGuardian(unittest.TestCase):
         self.assertNotIn("/home/mango", source)
 
 
-class TestAgentFleetGuardianWatcher(unittest.TestCase):
+class TestAgentFleetGuardianWatcher(unittest.IsolatedAsyncioTestCase):
     """Test cases for agent_fleet_guardian_watcher function."""
 
     @patch.dict(os.environ, {

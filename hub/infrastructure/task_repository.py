@@ -12,19 +12,21 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
+from hub.domain.task_result import (
+    MAX_DIFF_PATCH, MAX_TEST_SUMMARY, bound_patch,
+    normalize_test_summary as _normalize_test_summary,
+)
+
+from hub.domain.handoff import HandoffConflict
 
 
 LEASE_TTL_S = 300
 TASK_TTL_S = 24 * 3600
+SQLITE_CONNECT_TIMEOUT_S = 10.0
 AGENT_TYPES = ("codex", "claude_code", "hermes")
 TASK_STATES = (
     "queued", "leased", "running", "paused",
     "succeeded", "failed", "cancelled", "expired",
-)
-MAX_DIFF_PATCH = 102400
-MAX_TEST_SUMMARY = 20480
-TEST_SUMMARY_KEYS = (
-    "framework", "passed", "failed", "skipped", "errors", "duration_s", "failed_names",
 )
 
 SCHEMA = """
@@ -48,6 +50,14 @@ CREATE TABLE IF NOT EXISTS leases (
   nonce TEXT NOT NULL,
   leased_at TEXT NOT NULL,
   expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS handoff_receipts (
+  client_token TEXT PRIMARY KEY,
+  request_digest TEXT NOT NULL,
+  source_session_id TEXT NOT NULL,
+  handoff_id TEXT NOT NULL UNIQUE,
+  task_id TEXT NOT NULL REFERENCES tasks(task_id),
+  attempt_id TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_lease_task ON leases(task_id);
 CREATE TABLE IF NOT EXISTS results (
@@ -105,48 +115,6 @@ def _tx(conn):
     else:
         conn.execute("COMMIT")
 
-def _normalize_test_summary(raw):
-    """Allowlisted test summary; unknown keys dropped. None if empty."""
-    if raw is None or raw == "":
-        return None
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except (TypeError, ValueError):
-            return None
-    if not isinstance(raw, dict):
-        return None
-    out = {}
-    for key in TEST_SUMMARY_KEYS:
-        if key not in raw:
-            continue
-        value = raw[key]
-        if key == "framework":
-            text = str(value)[:32]
-            if text in ("pytest", "unittest", "unknown"):
-                out[key] = text
-            else:
-                out[key] = "unknown"
-        elif key in ("passed", "failed", "skipped", "errors"):
-            try:
-                out[key] = max(0, int(value))
-            except (TypeError, ValueError):
-                continue
-        elif key == "duration_s":
-            try:
-                out[key] = float(value)
-            except (TypeError, ValueError):
-                continue
-        elif key == "failed_names" and isinstance(value, (list, tuple)):
-            names = []
-            for item in value[:20]:
-                text = str(item)[:200]
-                if text:
-                    names.append(text)
-            out[key] = names
-    return out or None
-
-
 def _audit(conn, actor, action, task_id=None, detail=None, now=None):
     conn.execute(
         "INSERT INTO audit (ts, actor, action, task_id, detail) VALUES (?,?,?,?,?)",
@@ -160,39 +128,74 @@ class SqliteTaskRepository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = Path(db_path)
 
-    def _connect(self):
-        conn = sqlite3.connect(str(self.db_path), timeout=10, isolation_level=None)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        return conn
+    def _connect(self) -> sqlite3.Connection:
+        deadline = time.monotonic() + SQLITE_CONNECT_TIMEOUT_S
+        while True:
+            conn = sqlite3.connect(str(self.db_path),
+                                   timeout=max(0.0, deadline - time.monotonic()),
+                                   isolation_level=None)
+            try:
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA foreign_keys=ON")
+                return conn
+            except sqlite3.OperationalError as exc:
+                conn.close()
+                code = getattr(exc, "sqlite_errorcode", None)
+                locked = (code & 0xff) in (5, 6) if code is not None else str(exc) in (
+                    "database is locked", "database table is locked",
+                )
+                remaining = deadline - time.monotonic()
+                if not locked or remaining <= 0:
+                    raise
+                # WAL negotiation can fail immediately despite busy_timeout.
+                # Retry only this idempotent setup, after releasing all locks.
+                time.sleep(min(0.01, remaining))
+                if time.monotonic() >= deadline:
+                    raise
+            except BaseException:
+                conn.close()
+                raise
 
 
-    def init(self):
+    def init(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         if self.db_path.exists():
             try:
-                conn = self._connect()
-                ok = conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-                conn.close()
-            except sqlite3.DatabaseError:
+                with contextlib.closing(self._connect()) as conn:
+                    ok = conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            except sqlite3.DatabaseError as exc:
+                code = getattr(exc, "sqlite_errorcode", None)
+                # SQLite primary codes CORRUPT=11 and NOTADB=26 are stable;
+                # Python 3.10 exposes only their exact SQLite error messages.
+                corrupt = (code & 0xff) in (11, 26) if code is not None else str(exc) in (
+                    "database disk image is malformed", "file is not a database",
+                )
+                if not corrupt:
+                    raise
                 ok = False
             if not ok:
                 os.replace(self.db_path, self.db_path.with_name(self.db_path.name + ".corrupt"))
         conn = self._connect()
         try:
-            conn.executescript(SCHEMA)
-            self._migrate_schema(conn)
+            # Disable FK enforcement only on this initialization connection;
+            # table replacement is checked before committing and it then closes.
+            conn.execute("PRAGMA foreign_keys=OFF")
+            with conn:
+                # executescript commits any preceding transaction, so BEGIN
+                # belongs in the script, before the first schema change.
+                conn.executescript("BEGIN IMMEDIATE;\n" + SCHEMA)
+                self._migrate_schema(conn)
         finally:
             conn.close()
 
-    def _migrate_schema(self, conn):
-        """Add v4-initial columns/tables on existing LIVE databases.
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        """Apply v4 changes inside init's serialized schema transaction.
 
         CREATE TABLE IF NOT EXISTS does not alter old ``results`` / ``tasks``
         check constraints. Rebuild ``tasks`` when the state CHECK lacks
         ``paused`` so pause/continue can persist. New result columns are
-        nullable; duplicate-column ALTER is ignored.
+        nullable; column inspection runs under the same writer transaction.
         """
         cols = {
             row[1] for row in conn.execute("PRAGMA table_info(results)").fetchall()
@@ -215,7 +218,6 @@ class SqliteTaskRepository:
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'"
         ).fetchone()
         if sql and sql[0] and "'paused'" not in sql[0]:
-            conn.execute("PRAGMA foreign_keys=OFF")
             conn.execute(
                 "CREATE TABLE tasks_v4 ("
                 " task_id TEXT PRIMARY KEY,"
@@ -240,10 +242,14 @@ class SqliteTaskRepository:
             )
             conn.execute("DROP TABLE tasks")
             conn.execute("ALTER TABLE tasks_v4 RENAME TO tasks")
-            conn.execute("PRAGMA foreign_keys=ON")
+            if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise sqlite3.IntegrityError("task schema migration violates foreign keys")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_attempt ON tasks(attempt_id)")
 
     def create_task(self, *, machine, agent_type, project, instruction, requested_by,
-                    client_token=None, ttl_s=TASK_TTL_S, now=None, confirm=False):
+                    client_token=None, ttl_s=TASK_TTL_S, now=None, confirm=False,
+                    handoff=None):
         """创建任务；(client_token 命中, False) 幂等返回已有任务。
 
         超长 instruction 服务端截断至 2000 字符后再 INSERT（不依赖 SQLite CHECK
@@ -259,13 +265,26 @@ class SqliteTaskRepository:
                     existing = conn.execute(
                         "SELECT * FROM tasks WHERE client_token=?", (client_token,)).fetchone()
                     if existing:
+                        if handoff is not None:
+                            receipt = conn.execute(
+                                "SELECT request_digest FROM handoff_receipts WHERE client_token=?",
+                                (client_token,)).fetchone()
+                            if not receipt or receipt["request_digest"] != handoff["request_digest"]:
+                                raise HandoffConflict()
                         return dict(existing), False
+                attempt_id = uuid.uuid4().hex
                 conn.execute(
                     "INSERT INTO tasks (task_id, client_token, machine, agent_type, project,"
                     " instruction, requested_by, state, attempt_id, created_at, expires_at)"
                     " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (task_id, client_token, machine, agent_type, project, instruction,
-                     requested_by, "queued", uuid.uuid4().hex, _iso(now), _iso(now + ttl_s)))
+                     requested_by, "queued", attempt_id, _iso(now), _iso(now + ttl_s)))
+                if handoff is not None:
+                    conn.execute(
+                        "INSERT INTO handoff_receipts (client_token, request_digest, source_session_id,"
+                        " handoff_id, task_id, attempt_id) VALUES (?,?,?,?,?,?)",
+                        (client_token, handoff["request_digest"], handoff["source_session_id"],
+                         "h-" + uuid.uuid4().hex, task_id, attempt_id))
                 if confirm:
                     conn.execute(
                         "INSERT INTO task_gates (task_id, kind, state, requested_by,"
@@ -291,6 +310,49 @@ class SqliteTaskRepository:
         elif raw in ("", None):
             out["test_summary"] = None
         return out
+
+    def get_handoff_receipt(self, client_token: str) -> dict | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT request_digest, handoff_id, task_id, attempt_id"
+                " FROM handoff_receipts WHERE client_token=?", (client_token,)).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_task_for_attempt(self, attempt_id: str) -> dict | None:
+        """Indexed source binding; retain the result of this exact attempt."""
+        conn = self._connect()
+        try:
+            binding = conn.execute(
+                "SELECT task_id FROM tasks WHERE attempt_id=? UNION ALL"
+                " SELECT task_id FROM leases WHERE attempt_id=? UNION ALL"
+                " SELECT task_id FROM results WHERE attempt_id=? LIMIT 1",
+                (attempt_id, attempt_id, attempt_id)).fetchone()
+            if not binding:
+                return None
+            row = conn.execute(
+                "SELECT task_id, project, machine, instruction FROM tasks WHERE task_id=?",
+                (binding["task_id"],)).fetchone()
+            result = conn.execute(
+                "SELECT exit_code, log_summary, test_summary FROM results WHERE attempt_id=?",
+                (attempt_id,)).fetchone()
+            return {**dict(row), "result": self._decode_result(result)} if row else None
+        finally:
+            conn.close()
+
+    def get_session_search_metadata(self, attempt_id: str, machine_id: str) -> dict | None:
+        """Resolve an existing session attempt without exposing task content."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT project,agent_type FROM tasks WHERE attempt_id=? AND machine=? LIMIT 1",
+                (attempt_id, machine_id),
+            ).fetchone()
+            return dict(row) if row is not None else None
+        finally:
+            conn.close()
 
     def get_task(self, task_id):
         conn = self._connect()
@@ -415,10 +477,10 @@ class SqliteTaskRepository:
         if diff_patch is None:
             patch_value = None
         else:
-            patch_value = str(diff_patch)[:MAX_DIFF_PATCH]
+            patch_value = bound_patch(diff_patch)[0]
         summary_obj = _normalize_test_summary(test_summary)
         summary_json = (
-            json.dumps(summary_obj, ensure_ascii=False)[:MAX_TEST_SUMMARY]
+            json.dumps(summary_obj, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
             if summary_obj is not None else None
         )
         now = time.time() if now is None else now

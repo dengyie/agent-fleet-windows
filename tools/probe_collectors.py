@@ -11,6 +11,7 @@ from connectors import create
 from connectors.probe import ProbeContext
 from report_schema import sanitize_agent_state, sanitize_instances, sanitize_local_profiles
 from agent_profiles import OBSERVABLE_AGENT_TYPES
+from tools.local_process import NO_WINDOW
 from tools.probe.discovery import discover_instances
 
 DEFAULT_AGENT_TYPES = OBSERVABLE_AGENT_TYPES
@@ -28,10 +29,12 @@ def collect_system():
         if platform.system() == "Darwin":
             total_bytes = int(subprocess.run(
                 ["sysctl", "-n", "hw.memsize"],
-                capture_output=True, text=True, check=True,
+                capture_output=True, text=True, errors="replace", check=True,
+                creationflags=NO_WINDOW,
             ).stdout.strip())
             vm = subprocess.run(
-                ["vm_stat"], capture_output=True, text=True, check=True,
+                ["vm_stat"], capture_output=True, text=True, errors="replace",
+                check=True, creationflags=NO_WINDOW,
             ).stdout
             page_size = 4096
             available_pages = 0

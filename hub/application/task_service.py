@@ -22,14 +22,19 @@ import logging
 import threading
 import time
 from collections.abc import Mapping
+from itertools import islice
 from typing import Any
+
+from hub.domain.handoff import HandoffConflict
 
 from hub.domain.task import (
     DEFAULT_AGENT_TYPES,
+    DomainError,
     MAX_DIFF_PATCH,
     public_task,
     validate_task_input,
 )
+from hub.domain.task_result import PATCH_TRUNCATION_SUFFIX
 from session_schema import is_valid_session_id
 from tools.result_files import (
     MAX_BYTES_PER_WINDOW,
@@ -38,6 +43,7 @@ from tools.result_files import (
     normalize_path,
     public_file,
     public_file_meta,
+    redact_patch,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,6 +92,14 @@ class TaskHostPolicy:
                 return project in (host.get("projects") or [])
         return False
 
+    def handoff_targets(self, project: str) -> list[dict[str, Any]]:
+        """Registered same-project targets, bounded for the operator picker."""
+        rows = (self._whitelist.items() if self._whitelist is not None else
+                ((host.get("name"), host.get("projects") or []) for host in self._hosts))
+        matches = (machine for machine, projects in rows if project in (projects or ()))
+        return [{"machine": machine, "project": project, "agents": list(DEFAULT_AGENT_TYPES)}
+                for machine in islice(matches, 200)]
+
 
 class TaskService:
     """Application service for the operator-facing task lifecycle."""
@@ -131,7 +145,7 @@ class TaskService:
         """
         try:
             return fn(*args, **kwargs)
-        except ApplicationError:
+        except (ApplicationError, DomainError, HandoffConflict):
             raise
         except Exception as exc:
             logger.exception("task repository operation failed: %r", exc)
@@ -143,7 +157,7 @@ class TaskService:
 
     # -- write use case ------------------------------------------------------
 
-    def create(self, data: Any, actor: str) -> dict:
+    def create(self, data: Any, actor: str, *, handoff: dict | None = None) -> dict:
         """Validate, apply policy, persist, and announce a new task.
 
         Returns ``{"ok": True, "created": bool, "task": <public>}``. Raises
@@ -159,13 +173,14 @@ class TaskService:
         if not self.hosts.project_allowed(machine, project):
             raise ApplicationError(
                 "project_not_allowed", f"{machine} 未注册项目 {project}")
+        internal = {"handoff": handoff} if handoff is not None else {}
         task, created = self._task_op(
             self.task_repo.create_task,
             machine=machine, agent_type=validated["agent_type"],
             project=project, instruction=validated["instruction"],
             requested_by=actor,
             client_token=validated.get("client_token"),
-            confirm=bool(validated.get("confirm")))
+            confirm=bool(validated.get("confirm")), **internal)
         if created:
             self._emit("task_queued", task["machine"], task["task_id"], "queued")
         return {"ok": True, "created": created, "task": self._public_task(task)}
@@ -279,10 +294,11 @@ class TaskService:
         row, changed = self._task_op(self.task_repo.pause_task, task_id, actor)
         if row is None:
             raise ApplicationError("not_found", "任务不存在", 404)
-        if not changed:
+        if not changed and row["state"] != "paused":
             raise ApplicationError("conflict", "当前状态不可暂停", 409)
-        self._emit("task_paused", row["machine"], task_id, "paused")
-        return {"ok": True, "changed": True, "task": self._public_task(row)}
+        if changed:
+            self._emit("task_paused", row["machine"], task_id, "paused")
+        return {"ok": True, "changed": changed, "task": self._public_task(row)}
 
     def continue_task(self, task_id: str, actor: str) -> dict:
         row, changed = self._task_op(self.task_repo.continue_task, task_id, actor)
@@ -318,8 +334,8 @@ class TaskService:
         patch = result.get("diff_patch")
         if not isinstance(patch, str) or not patch:
             raise ApplicationError("not_found", "没有 patch", 404)
-        truncated = len(patch) > MAX_DIFF_PATCH
-        body = patch[:MAX_DIFF_PATCH]
+        body, _ = redact_patch(patch)
+        truncated = body.endswith(PATCH_TRUNCATION_SUFFIX)
         try:
             self.task_repo.audit_action(
                 actor or "operator", "read_task_diff", task_id,

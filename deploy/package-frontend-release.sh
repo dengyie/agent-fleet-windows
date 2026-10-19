@@ -7,12 +7,13 @@
 # 行为：
 #   - 只打包仓库 frontend/ 目录下的静态 release 文件（HTML/CSS/JS/非秘密 config），
 #     完整保留 frontend/ 内部的相对目录结构；不依赖构建系统，不访问外部网络。
+#   - 要求 <output_dir> 尚不存在，避免复用目录把未清单化文件带入 release。
 #   - 在 <output_dir>/manifest.json 写入确定性 manifest，只含 release 版本与文件清单，
 #     不含时间戳、随机值、哈希或任何秘密。
 #   - release 版本必须由调用者显式提供（$2 或环境变量 FRONTEND_RELEASE_VERSION）。
 #   - fail-closed：清单中任何文件命中下列红线即整体拒绝，且不产生任何输出文件：
 #       credentials/               凭据目录
-#       state/                     runtime 状态/数据库快照（frontend/state/store.js
+#       state/                     runtime 状态/数据库快照（frontend/assets/state/store.js
 #                                  本身是允许的静态模块，见下）
 #       runner-credential          runner 凭据名
 #       ingest-token               ingest 凭据名
@@ -143,7 +144,12 @@ if [ "$rejected" -ne 0 ]; then
 fi
 
 # --- 落盘：复制所有文件，然后写确定性 manifest.json ---
-mkdir -p "$output_dir"
+output_parent="$(dirname "$output_dir")"
+mkdir -p "$output_parent"
+if ! mkdir "$output_dir"; then
+  echo "error: output_dir 必须是新的目录: $output_dir" >&2
+  exit 2
+fi
 for rel in "${files[@]}"; do
   mkdir -p "$output_dir/$(dirname "$rel")"
   cp "$frontend_dir/$rel" "$output_dir/$rel"

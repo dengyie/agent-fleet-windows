@@ -51,6 +51,7 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Pattern, Sequence
 
+from tools.local_process import NO_WINDOW
 from tools.session.probes import claude, codex, hermes, pi
 
 DEFAULT_TIMEOUT_S = 8.0
@@ -150,6 +151,7 @@ class CapabilityManifest:
     structured_stream: bool = False
     hooks: bool = False
     pty: bool = False
+    interactive_questions: bool = False
     supported_event_kinds: tuple[str, ...] = ()
     quality_by_kind: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     diagnostics: list[str] = field(default_factory=list)
@@ -219,6 +221,7 @@ def _build_manifest(
         structured_stream=bool(caps.get("structured_stream", False)),
         hooks=bool(caps.get("hooks", False)),
         pty=bool(caps.get("pty", False)),
+        interactive_questions=caps.get("interactive_questions") is True,
         supported_event_kinds=tuple(kinds),
         quality_by_kind=dict(qualities or {}),
         diagnostics=list(diagnostics or [])[:MAX_DIAGNOSTICS],
@@ -297,8 +300,10 @@ def _run_binary(
             cwd=_probe_cwd(),
             env=env,
             text=True,
+            errors="replace",
             timeout=timeout_s,
             check=False,
+            creationflags=NO_WINDOW,
         )
     except FileNotFoundError:
         return "missing", ""
@@ -313,7 +318,7 @@ def _run_binary(
 
 
 def _resume_probe(
-    exe_path: str, timeout_s: float, path_adds: Sequence[str] = ()
+    exe_path: str, timeout_s: float, path_adds: Sequence[str] = (), agent: str = "claude_code"
 ) -> bool:
     """Verify a genuine resume path; only a success yields ``True``.
 
@@ -321,7 +326,8 @@ def _resume_probe(
     to False and ``resume`` stays False.  Uses the same isolated invocation.
     """
     code, _stdout = _run_binary(
-        [exe_path, "--resume", "--help"], timeout_s, path_adds=path_adds
+        ([exe_path, "exec", "resume", "--help"] if agent == "codex" else
+         [exe_path, "--resume", "--help"]), timeout_s, path_adds=path_adds
     )
     return code == "ok"
 
@@ -471,7 +477,7 @@ def probe_agent(
     # ---- resume is never auto-appended ------------------------------
     if (agent in _RESUME_VERIFIABLE_FAMILIES and verify_resume
             and caps.get("resume")):
-        if _resume_probe(exe_path, timeout_s, path_adds):
+        if _resume_probe(exe_path, timeout_s, path_adds, agent=agent):
             caps["resume"] = True
         else:
             caps["resume"] = False
@@ -525,6 +531,7 @@ def as_dict(manifest: CapabilityManifest) -> dict[str, Any]:
         "structured_stream": manifest.structured_stream,
         "hooks": manifest.hooks,
         "pty": manifest.pty,
+        "interactive_questions": manifest.interactive_questions,
         "supported_event_kinds": sorted(manifest.supported_event_kinds),
         "quality_by_kind": {
             kind: sorted(quals)

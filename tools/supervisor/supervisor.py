@@ -21,15 +21,19 @@ from __future__ import annotations
 
 import os
 import platform as _platform_mod
+import queue
 import select
 import signal
 import subprocess
+import threading
 import time
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from report_schema import INSTANCE_FAMILIES
+from tools.local_process import NO_WINDOW
 
 from tools.supervisor.model import (
     GROUP_CAPABILITY_CGROUP,
@@ -69,7 +73,7 @@ _CONTROL_OUTCOMES = frozenset({
     "resumed", "recovered",
     "pause_failed", "quarantine_failed", "resume_failed",
     "terminated", "terminated_forced", "escape_unverified",
-    "group_remaining",
+    "group_remaining", "completed",
     "already_finished", "no_live_process", "control_failed",
     "appended", "applied", "unknown_profile", "family_mismatch",
     "resume_unverified", "unsupported_action",
@@ -81,6 +85,11 @@ _ABUF_MAX = 1 << 20
 # Post-exit tail-flush bounds: per-pump step and the whole-flush wall budget.
 _FLUSH_STEP = 0.2
 _FLUSH_BUDGET = 2.0
+
+_SIGTERM = getattr(signal, "SIGTERM", 15)
+_SIGKILL = getattr(signal, "SIGKILL", 9)
+_SIGSTOP = getattr(signal, "SIGSTOP", 19)
+_SIGCONT = getattr(signal, "SIGCONT", 18)
 
 
 class GroupError(RuntimeError):
@@ -208,6 +217,7 @@ class POSIXGroupOps(GroupOps):
                 close_fds=True,
                 restore_signals=True,
                 bufsize=0,
+                creationflags=NO_WINDOW,
             )
         except OSError:
             raise GroupError("spawn_failed")
@@ -397,6 +407,348 @@ class MacGroupOps(POSIXGroupOps):
         return (GROUP_CAPABILITY_PGROUP, "1")
 
 
+class WindowsGroupOps(GroupOps):
+    """Windows process-tree backend for runner and adopted CLI sessions.
+
+    Windows has no POSIX process groups.  A supervised root is therefore
+    treated as the root of a Win32 parent/child tree.  ``taskkill /T`` handles
+    termination and the native ``NtSuspendProcess``/``NtResumeProcess`` APIs
+    provide the pause/resume controls needed by the supervisor.  Output is
+    consumed by a daemon reader thread because ``select()`` cannot wait on a
+    Windows anonymous pipe.
+    """
+
+    _READ_CHUNK = 65536
+
+    def __init__(self):
+        super().__init__(platform="windows")
+
+    def capability(self):
+        return (GROUP_CAPABILITY_PGROUP, "1")
+
+    @staticmethod
+    def _attached(handle) -> bool:
+        return isinstance(handle, _AttachedHandle)
+
+    def create(self, argv, cwd, env):
+        flags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)) | NO_WINDOW
+        try:
+            proc = subprocess.Popen(
+                list(argv),
+                cwd=cwd or os.getcwd(),
+                env=_bounded_spawn_env(env),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                creationflags=flags,
+                close_fds=True,
+                bufsize=0,
+            )
+        except (OSError, ValueError):
+            raise GroupError("spawn_failed")
+        return _Bound(proc=proc)
+
+    def attach(self, pid: int, started_at: str, exe_path: str):
+        pid_i = int(pid)
+        if pid_i <= 0 or not self._tree_pids(pid_i):
+            raise GroupError("pid_reused")
+        return _AttachedHandle(pid=pid_i, pgid=pid_i,
+                               started_at=started_at, exe_path=exe_path)
+
+    def proc_poll(self, handle):
+        if self._attached(handle):
+            return None if self.group_alive(handle) else 0
+        return handle.proc.poll()
+
+    def proc_wait(self, handle, timeout=None):
+        if self._attached(handle):
+            return None
+        try:
+            return handle.proc.wait(timeout=timeout)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            return None
+
+    def group_id(self, handle):
+        return f"grp_{_handle_pid(handle) or 0}"
+
+    def group_alive(self, handle):
+        if self._attached(handle):
+            return any(self._pid_alive(pid) for pid in self._tree_pids(handle.pid))
+        if handle.proc.poll() is None:
+            return True
+        return any(self._pid_alive(pid) for pid in self._tree_pids(
+            getattr(handle.proc, "pid", 0)))
+
+    def group_terminate(self, handle, sig):
+        if sig == _SIGSTOP:
+            return self._suspend_tree(_handle_pid(handle))
+        if sig == _SIGCONT:
+            return self._resume_tree(_handle_pid(handle))
+        return self._taskkill(_handle_pid(handle), force=False)
+
+    def group_kill(self, handle, sig):
+        if sig in (_SIGSTOP, _SIGCONT):
+            return self.group_terminate(handle, sig)
+        return self._taskkill(_handle_pid(handle), force=True)
+
+    def group_reap(self, handle, timeout=None):
+        if self._attached(handle):
+            deadline = time.monotonic() + max(0.0, float(timeout or 0))
+            while self.group_alive(handle) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            return not self.group_alive(handle)
+        try:
+            handle.proc.wait(timeout=max(0.0, float(timeout or 0)))
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            return False
+        deadline = time.monotonic() + max(0.0, float(timeout or 0))
+        while self.group_alive(handle) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return not self.group_alive(handle)
+
+    def close(self, handle):
+        if self._attached(handle):
+            return
+        try:
+            if handle.proc.stdout is not None:
+                handle.proc.stdout.close()
+        except Exception:
+            pass
+
+    # ---- Windows process tree ---------------------------------------------
+
+    @staticmethod
+    def _tree_pids(root_pid: int | None) -> list[int]:
+        try:
+            root = int(root_pid or 0)
+        except (TypeError, ValueError):
+            return []
+        if root <= 0:
+            return []
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class PROCESSENTRY32W(ctypes.Structure):
+                _fields_ = [
+                    ("dwSize", wintypes.DWORD),
+                    ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", wintypes.LONG),
+                    ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", wintypes.WCHAR * 260),
+                ]
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateToolhelp32Snapshot.argtypes = [
+                wintypes.DWORD,
+                wintypes.DWORD,
+            ]
+            kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+            kernel32.Process32FirstW.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(PROCESSENTRY32W),
+            ]
+            kernel32.Process32FirstW.restype = wintypes.BOOL
+            kernel32.Process32NextW.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(PROCESSENTRY32W),
+            ]
+            kernel32.Process32NextW.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+            if snapshot == wintypes.HANDLE(-1).value:
+                return [root]
+            rows = []
+            try:
+                item = PROCESSENTRY32W()
+                item.dwSize = ctypes.sizeof(item)
+                ok = kernel32.Process32FirstW(snapshot, ctypes.byref(item))
+                while ok:
+                    rows.append((int(item.th32ProcessID), int(item.th32ParentProcessID)))
+                    ok = kernel32.Process32NextW(snapshot, ctypes.byref(item))
+            finally:
+                kernel32.CloseHandle(snapshot)
+        except (AttributeError, OSError, TypeError, ValueError):
+            return [root]
+        children: dict[int, list[int]] = {}
+        for pid, parent in rows:
+            children.setdefault(parent, []).append(pid)
+        found: list[int] = []
+        pending = [root]
+        seen: set[int] = set()
+        while pending:
+            pid = pending.pop(0)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            found.append(pid)
+            pending.extend(children.get(pid, ()))
+        return found
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        if os.name != "nt":
+            return False
+        try:
+            import ctypes
+            from ctypes import wintypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [
+                wintypes.DWORD,
+                wintypes.BOOL,
+                wintypes.DWORD,
+            ]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.WaitForSingleObject.argtypes = [
+                wintypes.HANDLE,
+                wintypes.DWORD,
+            ]
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(0x00100000, False, int(pid))  # SYNCHRONIZE
+            if not handle:
+                return False
+            try:
+                result = kernel32.WaitForSingleObject(handle, 0)
+                return int(result) == 0x00000102  # WAIT_TIMEOUT
+            finally:
+                kernel32.CloseHandle(handle)
+        except (AttributeError, OSError, TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _taskkill(root_pid: int | None, *, force: bool) -> bool:
+        try:
+            root = int(root_pid or 0)
+        except (TypeError, ValueError):
+            return False
+        if root <= 0:
+            return False
+        argv = ["taskkill.exe", "/PID", str(root), "/T"]
+        if force:
+            argv.append("/F")
+        try:
+            result = subprocess.run(argv, capture_output=True,
+                                    stdin=subprocess.DEVNULL, timeout=8,
+                                    check=False, creationflags=NO_WINDOW)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return False
+        return result.returncode == 0
+
+    @staticmethod
+    def _suspend_process(pid: int, resume: bool) -> bool:
+        if os.name != "nt":
+            return False
+        try:
+            import ctypes
+            from ctypes import wintypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            ntdll = ctypes.WinDLL("ntdll")
+            access = 0x0800 | 0x0400 | 0x1000  # suspend/query/synchronize
+            kernel32.OpenProcess.argtypes = [
+                wintypes.DWORD,
+                wintypes.BOOL,
+                wintypes.DWORD,
+            ]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(access, False, int(pid))
+            if not handle:
+                return False
+            try:
+                fn = ntdll.NtResumeProcess if resume else ntdll.NtSuspendProcess
+                fn.argtypes = [wintypes.HANDLE]
+                fn.restype = ctypes.c_long
+                return int(fn(handle)) == 0
+            finally:
+                kernel32.CloseHandle(handle)
+        except (AttributeError, OSError, TypeError, ValueError):
+            return False
+
+    @classmethod
+    def _suspend_tree(cls, root_pid: int | None) -> bool:
+        pids = cls._tree_pids(root_pid)
+        if not pids:
+            return False
+        suspended = []
+        for pid in reversed(pids):
+            if not cls._suspend_process(pid, False):
+                for prior in suspended:
+                    cls._suspend_process(prior, True)
+                return False
+            suspended.append(pid)
+        return True
+
+    @classmethod
+    def _resume_tree(cls, root_pid: int | None) -> bool:
+        pids = cls._tree_pids(root_pid)
+        return bool(pids) and all(cls._suspend_process(pid, True) for pid in pids)
+
+    # ---- deadline-safe output reading -------------------------------------
+
+    def _ensure_reader(self, handle):
+        if getattr(handle, "_reader_started", False):
+            return
+        handle._reader_started = True
+        handle._queue = queue.Queue(maxsize=256)
+
+        def reader():
+            try:
+                stream = handle.proc.stdout
+                while stream is not None:
+                    raw = stream.read(self._READ_CHUNK)
+                    if not raw:
+                        break
+                    try:
+                        handle._queue.put(raw, timeout=0.1)
+                    except queue.Full:
+                        pass
+            except Exception:
+                pass
+            finally:
+                handle._reader_eof = True
+
+        handle._reader_thread = threading.Thread(
+            target=reader, name="agent-fleet-windows-reader", daemon=True)
+        handle._reader_thread.start()
+
+    def pump(self, handle, timeout, on_line=None, should_abort=None):
+        if handle is None or getattr(handle, "proc", None) is None:
+            return "eof"
+        self._ensure_reader(handle)
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            if should_abort is not None and should_abort():
+                return "abort"
+            if POSIXGroupOps._drain_lines(self, handle, on_line):
+                return "line"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "timeout"
+            try:
+                raw = handle._queue.get(timeout=min(remaining, 0.2))
+            except queue.Empty:
+                if handle._reader_eof and handle._queue.empty():
+                    POSIXGroupOps._drain_lines(self, handle, on_line, flush=True)
+                    handle._abuf = b""
+                    return "eof"
+                continue
+            if not isinstance(raw, bytes):
+                raw = str(raw).encode("utf-8", "replace")
+            if len(handle._abuf) + len(raw) > _ABUF_MAX:
+                keep = handle._abuf[-(_ABUF_MAX - len(raw)):] if len(raw) < _ABUF_MAX else b""
+                handle._abuf = keep + raw
+            else:
+                handle._abuf += raw
+
+
 @dataclass
 class _Bound:
     """Mutable handle bundle for an owned process group.
@@ -415,6 +767,10 @@ class _Bound:
     resume_token: str | None = None
     exe_path: str | None = None
     _abuf: bytes = b""
+    _queue: Any = None
+    _reader_thread: Any = None
+    _reader_started: bool = False
+    _reader_eof: bool = False
 
 
 @dataclass
@@ -459,6 +815,11 @@ class _ManagedEntry:
     native_file_path: str | None = None
     resume_token: str | None = None
     exe_path: str | None = None
+    control_lock: Any = field(default_factory=threading.RLock, repr=False,
+                              compare=False)
+    control_epoch: int = 0
+    resume_pending: object | None = field(default=None, repr=False,
+                                          compare=False)
 
 
 @dataclass
@@ -487,8 +848,11 @@ class Supervisor:
         self._manifest_dir = Path(manifest_dir)
         self._manifest_dir.mkdir(parents=True, exist_ok=True)
         if ops is None:
-            if _platform_mod.system().lower() == "linux":
+            system = _platform_mod.system().lower()
+            if system == "linux":
                 ops = LinuxGroupOps()
+            elif system == "windows":
+                ops = WindowsGroupOps()
             else:
                 ops = MacGroupOps()
         self._ops = ops
@@ -722,7 +1086,17 @@ class Supervisor:
         removed so a stale revivable adoption cannot survive a detach.  An
         unknown ``session_id`` is a no-op (no exception).
         """
-        entry = self._entries.pop(session_id, None)
+        entry = self._entries.get(session_id)
+        if entry is None:
+            return
+        with entry.control_lock:
+            if self._entries.get(session_id) is not entry:
+                return
+            entry.control_epoch += 1
+            self._entries.pop(session_id, None)
+            self._detach_entry(session_id, entry)
+
+    def _detach_entry(self, session_id: str, entry: _ManagedEntry) -> None:
         if entry is not None and isinstance(entry.handle, _AttachedHandle):
             # an ATTACHED (adopted) seat was dropped.  The bounded in-memory
             # tombstone lets a subsequent revoke-side control answer
@@ -837,55 +1211,88 @@ class Supervisor:
             return False
 
     def pause_session(self, session_id: str) -> str:
+        entry = self._entries.get(session_id)
+        if entry is None:
+            raise UnknownSessionError(session_id)
+        with entry.control_lock:
+            if self._entries.get(session_id) is not entry:
+                raise UnknownSessionError(session_id)
+            entry.control_epoch += 1
+            return self._pause_session_locked(session_id, entry)
+
+    def _pause_session_locked(self, session_id: str,
+                              entry: _ManagedEntry) -> str:
         """Pause an owned live process group (SIGSTOP)."""
-        m = self.get(session_id)
+        m = entry.manifest
         if m.state in TERMINAL_STATES:
             return m.state
-        handle = self._handle_of(session_id)
+        handle = entry.handle
         if handle is None or not self._group_alive_checked(handle):
             return "no_live_process"
         gate = self._guard_adopted(session_id)
         if gate:
             return gate
-        if not self._signal_ok(handle, self._ops, signal.SIGSTOP):
+        if not self._signal_ok(handle, self._ops, _SIGSTOP):
             return self._fail_operation(m, "pause_failed")
         m.state = PAUSED
         self._set_reason(m, "pause")
         return PAUSED
 
     def resume_session(self, session_id: str) -> str:
+        entry = self._entries.get(session_id)
+        if entry is None:
+            raise UnknownSessionError(session_id)
+        with entry.control_lock:
+            if self._entries.get(session_id) is not entry:
+                raise UnknownSessionError(session_id)
+            entry.control_epoch += 1
+            return self._resume_session_locked(session_id, entry)
+
+    def _resume_session_locked(self, session_id: str,
+                               entry: _ManagedEntry) -> str:
         """Resume a stopped process group (SIGCONT thaw)."""
-        m = self.get(session_id)
+        m = entry.manifest
         if m.state in TERMINAL_STATES:
             return m.state
-        handle = self._handle_of(session_id)
+        handle = entry.handle
         if handle is None or not self._group_alive_checked(handle):
             return "no_live_process"
         gate = self._guard_adopted(session_id)
         if gate:
             return gate
-        if not self._signal_ok(handle, self._ops, signal.SIGCONT):
+        if not self._signal_ok(handle, self._ops, _SIGCONT):
             return self._fail_operation(m, "resume_failed")
         m.state = RUNNING
         self._set_reason(m, "resumed")
         return RUNNING
 
     def quarantine_session(self, session_id: str) -> str:
+        entry = self._entries.get(session_id)
+        if entry is None:
+            raise UnknownSessionError(session_id)
+        with entry.control_lock:
+            if self._entries.get(session_id) is not entry:
+                raise UnknownSessionError(session_id)
+            entry.control_epoch += 1
+            return self._quarantine_session_locked(session_id, entry)
+
+    def _quarantine_session_locked(self, session_id: str,
+                                   entry: _ManagedEntry) -> str:
         """Quarantine a session: SIGSTOP the group before freezing state.
 
         A failed stop is surfaced as ``quarantine_failed`` (bounded), never
         silently reported as success.
         """
-        m = self.get(session_id)
+        m = entry.manifest
         if m.state in TERMINAL_STATES:
             return m.state
-        handle = self._handle_of(session_id)
+        handle = entry.handle
         if handle is None or not self._group_alive_checked(handle):
             return "no_live_process"
         gate = self._guard_adopted(session_id)
         if gate:
             return gate
-        if not self._signal_ok(handle, self._ops, signal.SIGSTOP):
+        if not self._signal_ok(handle, self._ops, _SIGSTOP):
             return self._fail_operation(m, "quarantine_failed")
         m.state = QUARANTINED
         self._set_reason(m, "quarantine")
@@ -966,6 +1373,74 @@ class Supervisor:
         return claimed
 
     def append_user_turn(self, session_id: str, text: str) -> str:
+        entry = self._entries.get(session_id)
+        if entry is None:
+            raise UnknownSessionError(session_id)
+        with entry.control_lock:
+            if self._entries.get(session_id) is not entry:
+                raise UnknownSessionError(session_id)
+            if entry.resume_pending is not None:
+                return "unsupported_action"
+            epoch = entry.control_epoch
+            outcome = self._prepare_user_turn(session_id, text, entry)
+            reservation = object() if not isinstance(outcome, str) else None
+            if reservation is not None:
+                entry.resume_pending = reservation
+        if isinstance(outcome, str):
+            return outcome
+        m, old, argv, cwd, env = outcome
+        try:
+            handle = self._ops.create(argv, cwd, env)
+        except Exception:
+            with entry.control_lock:
+                if entry.resume_pending is reservation:
+                    entry.resume_pending = None
+                if entry.control_epoch != epoch or m.state in TERMINAL_STATES:
+                    return "terminated" if m.state in TERMINAL_STATES else "unsupported_action"
+                return self._fail_operation(m, "control_failed")
+        with entry.control_lock:
+            if entry.resume_pending is reservation:
+                entry.resume_pending = None
+            if (self._entries.get(session_id) is not entry
+                    or entry.control_epoch != epoch
+                    or (m.state in TERMINAL_STATES
+                        and m.reason != "completed")
+                    or m.state == QUARANTINED):
+                try:
+                    self._ops.group_kill(handle, _SIGKILL)
+                except Exception:
+                    pass
+                try:
+                    group_gone = self._wait_gone(handle, timeout=1.0)
+                except Exception:
+                    group_gone = False
+                try:
+                    reaped = bool(self._ops.group_reap(handle, timeout=1.0))
+                except Exception:
+                    reaped = False
+                try:
+                    self._ops.close(handle)
+                except Exception:
+                    pass
+                if not group_gone or not reaped:
+                    self._set_reason(m, "escape_unverified")
+                    return "escape_unverified"
+                if m.state in TERMINAL_STATES:
+                    return m.state
+                return "unsupported_action"
+            if old is not None and entry.handle is old:
+                try:
+                    self._ops.close(old)
+                except Exception:
+                    pass
+            entry.handle = handle
+            _stamp_private_identity(handle, entry)
+            m.state = RUNNING
+            self._set_reason(m, "appended")
+            return "appended"
+
+    def _prepare_user_turn(self, session_id: str, text: str,
+                           entry: _ManagedEntry):
         """Follow-up via native session resume, never stdin /tmp sibling.
 
         ``create(argv, None, {})`` would land in ``/tmp``, inherit a secret-free
@@ -978,7 +1453,9 @@ class Supervisor:
         Private identity lives on the entry so a naturally finished session
         can still resume after ``_release_handle``.
         """
-        m = self.get(session_id)
+        m = entry.manifest
+        if m.state in TERMINAL_STATES and m.reason != "completed":
+            return m.state
         gate = self._guard_adopted(session_id)
         if gate:
             return gate
@@ -991,9 +1468,9 @@ class Supervisor:
             return "resume_unverified"
         if not isinstance(text, str) or not text:
             return "control_failed"
-        if m.state == QUARANTINED:
+        if m.state in (PAUSED, QUARANTINED):
             return "unsupported_action"
-        identity = _native_resume_identity(self._entries.get(session_id))
+        identity = _native_resume_identity(entry)
         if identity is None:
             if m.state in TERMINAL_STATES:
                 return m.state
@@ -1004,22 +1481,7 @@ class Supervisor:
         argv = _native_resume_argv(family, exe, token, text)
         if not validate_command(argv) or not cwd:
             return "unsupported_action"
-        entry = self._entries[session_id]
-        old = entry.handle
-        try:
-            handle = self._ops.create(argv, cwd, env)
-        except Exception:
-            return self._fail_operation(m, "control_failed")
-        if old is not None:
-            try:
-                self._ops.close(old)
-            except Exception:
-                pass
-        entry.handle = handle
-        _stamp_private_identity(handle, entry)
-        m.state = RUNNING
-        self._set_reason(m, "appended")
-        return "appended"
+        return m, entry.handle, argv, cwd, env
 
     def apply_local_profile(self, session_id: str, profile_id: str) -> str:
         """Flip the node-local cc-switch current pointer.  Never pushes keys."""
@@ -1039,11 +1501,35 @@ class Supervisor:
         return self._fail_operation(m, "control_failed")
 
     def terminate_session(self, session_id: str, grace_s: float = 5.0) -> str:
+        entry = self._entries.get(session_id)
+        if entry is None:
+            raise UnknownSessionError(session_id)
+        with entry.control_lock:
+            if self._entries.get(session_id) is not entry:
+                raise UnknownSessionError(session_id)
+            entry.control_epoch += 1
+            return self._terminate_session_locked(session_id, grace_s, entry)
+
+    def _terminate_if_current(self, session_id: str, handle,
+                              grace_s: float) -> bool:
+        entry = self._entries.get(session_id)
+        if entry is None:
+            return False
+        with entry.control_lock:
+            if (self._entries.get(session_id) is not entry
+                    or entry.handle is not handle):
+                return False
+            entry.control_epoch += 1
+            self._terminate_session_locked(session_id, grace_s, entry)
+            return True
+
+    def _terminate_session_locked(self, session_id: str, grace_s: float,
+                                  entry: _ManagedEntry) -> str:
         """Stateful terminate: graceful SIGTERM -> bounded grace -> SIGKILL."""
-        m = self.get(session_id)
+        m = entry.manifest
         if m.state in TERMINAL_STATES:
             return m.state
-        handle = self._handle_of(session_id)
+        handle = entry.handle
         if handle is None or not self._group_alive_checked(handle):
             if handle is None:
                 self._mark_terminated(m, "no_live_process")
@@ -1069,15 +1555,15 @@ class Supervisor:
         if escaped:
             # a child slipped out of the group namespace: group-wide kill cannot
             # be guaranteed, so report the degraded outcome honestly.
-            self._signal_ok(handle, self._ops, signal.SIGTERM)
-            self._signal_ok(handle, self._ops, signal.SIGKILL)
+            self._signal_ok(handle, self._ops, _SIGTERM)
+            self._signal_ok(handle, self._ops, _SIGKILL)
             self._mark_terminated(m, "escape_unverified")
             self._ops.close(handle)
             self._release_handle(session_id)
             return "escape_unverified"
 
         # graceful
-        self._signal_ok(handle, self._ops, signal.SIGTERM)
+        self._signal_ok(handle, self._ops, _SIGTERM)
         if self._wait_gone(handle, max(0.0, float(grace_s))):
             self._mark_terminated(m, "terminated")
             self._ops.close(handle)
@@ -1085,7 +1571,7 @@ class Supervisor:
             return "terminated"
 
         # forced
-        self._signal_ok(handle, self._ops, signal.SIGKILL)
+        self._signal_ok(handle, self._ops, _SIGKILL)
         if self._wait_gone(handle, 2.0):
             self._mark_terminated(m, "terminated_forced")
             self._ops.close(handle)
@@ -1095,6 +1581,18 @@ class Supervisor:
         self._ops.close(handle)
         self._release_handle(session_id)
         return "escape_unverified"
+
+    def pump_output(self, session_id: str) -> None:
+        """Drain resumed children on control-client ticks to avoid full pipes."""
+        m = self.get(session_id)
+        handle = self._handle_of(session_id)
+        if handle is None or getattr(handle, "proc", None) is None:
+            return
+        rc = self._ops.proc_poll(handle)
+        if rc is not None:
+            self._finish_completed(m, handle, session_id, rc, lambda line: None)
+        else:
+            self._ops.pump(handle, 0.1, lambda line: None)
 
     def wait_session(
         self,
@@ -1115,13 +1613,35 @@ class Supervisor:
         handle = self._handle_of(session_id)
         if handle is None:
             return ManagedRunResult(exit_code=125, outcome="no_live_process")
-        on_line = on_line or (lambda _s: None)
+        consumer = on_line or (lambda _s: None)
+        def on_line(line):
+            # Codex reports the native identity before any model output. Keep
+            # it with the private entry so a finished session can resume.
+            if m.agent == "codex":
+                try:
+                    record = json.loads(line)
+                    token = record.get("thread_id") if record.get("type") == "thread.started" else None
+                    if isinstance(token, str) and token:
+                        entry = self._entries.get(session_id)
+                        if entry is not None and entry.handle is handle:
+                            entry.resume_token = token
+                except (ValueError, TypeError, AttributeError):
+                    pass
+            consumer(line)
         should_abort = should_abort or (lambda: False)
         deadline = time.monotonic() + max(0.0, float(timeout_s))
         aborted = False
         timed_out = False
 
         while True:
+            entry = self._entries.get(session_id)
+            if entry is None:
+                return ManagedRunResult(exit_code=125, outcome="superseded")
+            with entry.control_lock:
+                if (self._entries.get(session_id) is not entry
+                        or entry.handle is not handle):
+                    return ManagedRunResult(exit_code=125,
+                                            outcome="superseded")
             # 1. completed process?
             try:
                 rc = self._ops.proc_poll(handle)
@@ -1150,26 +1670,34 @@ class Supervisor:
             # else: re-poll + re-check deadline at the top.
 
         if aborted:
-            try:
-                self.terminate_session(session_id, grace_s=1.0)
-            except Exception:
-                pass
-            self._ops.close(handle)
-            self._release_handle(session_id)
+            if not self._terminate_if_current(
+                    session_id, handle, grace_s=1.0):
+                return ManagedRunResult(exit_code=125,
+                                        outcome="superseded")
             return ManagedRunResult(exit_code=130, aborted=True,
                                     outcome="aborted")
         # timed_out
-        try:
-            self.terminate_session(
-                session_id, grace_s=min(2.0, max(0.1, timeout_s / 20)))
-        except Exception:
-            pass
-        self._ops.close(handle)
-        self._release_handle(session_id)
+        if not self._terminate_if_current(
+                session_id, handle,
+                grace_s=min(2.0, max(0.1, timeout_s / 20))):
+            return ManagedRunResult(exit_code=125, outcome="superseded")
         return ManagedRunResult(exit_code=124, timed_out=True,
                                 outcome="timed_out")
 
     def _finish_completed(self, m, handle, session_id, rc, on_line):
+        entry = self._entries.get(session_id)
+        if entry is None:
+            return ManagedRunResult(exit_code=int(rc or 0),
+                                    outcome="superseded")
+        with entry.control_lock:
+            if (self._entries.get(session_id) is not entry
+                    or entry.handle is not handle):
+                return ManagedRunResult(exit_code=int(rc or 0),
+                                        outcome="superseded")
+            return self._finish_completed_locked(
+                m, handle, session_id, rc, on_line)
+
+    def _finish_completed_locked(self, m, handle, session_id, rc, on_line):
         """Bounded completion: drain until EOF, reap, kill stragglers.
 
         The leader (``m.state`` the supervisor knows) has exited, but members of
@@ -1202,7 +1730,7 @@ class Supervisor:
                 pass
             self._ops.close(handle)
             self._release_handle(session_id)
-            self._mark_terminated(m, "terminated")
+            self._mark_terminated(m, "completed")
             return ManagedRunResult(exit_code=int(rc or 0),
                                     outcome="finished")
 
@@ -1211,7 +1739,7 @@ class Supervisor:
         # reap with a bounded settle.  Report ``group_remaining`` (bounded,
         # degraded) instead of plain success.
         try:
-            self._ops.group_kill(handle, signal.SIGKILL)
+            self._ops.group_kill(handle, _SIGKILL)
         except Exception:
             pass
         try:
@@ -1349,6 +1877,8 @@ def _flags_for(cap: str) -> list[str]:
 _SAFE_ENV_KEYS = (
     "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL",
     "PATH", "TMPDIR", "TERM", "COLORTERM", "CI", "GITHUB_ACTIONS",
+    "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "SYSTEMROOT",
+    "WINDIR", "ComSpec", "PATHEXT",
 )
 
 
@@ -1377,8 +1907,8 @@ def _live_process_cwd(pid: int) -> str | None:
     try:
         completed = subprocess.run(
             [lsof, "-a", "-p", str(pid_i), "-d", "cwd", "-Fn"],
-            capture_output=True, text=True, timeout=2,
-            stdin=subprocess.DEVNULL, check=False,
+            capture_output=True, text=True, errors="replace", timeout=2,
+            stdin=subprocess.DEVNULL, check=False, creationflags=NO_WINDOW,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -1402,7 +1932,13 @@ def _bounded_spawn_env(env):
             base[key] = val
     base.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
     base.setdefault("LANG", "C.UTF-8")
-    base.setdefault("HOME", os.environ.get("HOME") or os.path.expanduser("~"))
+    if os.name == "nt":
+        base.setdefault("HOME", os.environ.get("USERPROFILE") or os.path.expanduser("~"))
+        base.setdefault("USERPROFILE", os.path.expanduser("~"))
+        base.setdefault("SYSTEMROOT", os.environ.get("SystemRoot", r"C:\Windows"))
+        base.setdefault("ComSpec", os.environ.get("ComSpec", r"C:\Windows\System32\cmd.exe"))
+    else:
+        base.setdefault("HOME", os.environ.get("HOME") or os.path.expanduser("~"))
     return base
 
 
@@ -1483,7 +2019,7 @@ def _native_resume_identity(entry):
             if src is None:
                 continue
             val = getattr(src, name, None)
-            if val:
+            if val or (name == "env" and isinstance(val, Mapping)):
                 return val
         return None
 
@@ -1517,11 +2053,11 @@ _RESUME_FORBIDDEN_FLAGS = frozenset({
 
 
 def _native_resume_argv(family: str, exe: str, token: str, text: str) -> list[str]:
-    """Build a native ``--resume`` argv.  Never reuse adapter defaults."""
+    """Build the family-specific native resume argv."""
     if not exe or not token or not isinstance(text, str) or not text:
         return []
     if family == "codex":
-        argv = [exe, "exec", "--resume", token, text]
+        argv = [exe, "exec", "resume", "--json", token, text]
     elif family == "claude_code":
         argv = [exe, "--resume", token, text]
     elif family == "pi":

@@ -27,8 +27,21 @@ info() { echo "smoke: $*"; }
 WORK="$(mktemp -d)"
 HUB_PID=""
 cleanup() {
+  local rc=$? evidence
+  if [ -n "$HUB_PID" ]; then
+    kill "$HUB_PID" 2>/dev/null || true
+    wait "$HUB_PID" 2>/dev/null || true
+  fi
+  if [ "$rc" -ne 0 ] && [ -f "$WORK/hub.log" ]; then
+    evidence="${FLEET_SMOKE_ARTIFACT_DIR:-$(mktemp -d)}"
+    mkdir -p "$evidence"
+    chmod 700 "$evidence"
+    cp "$WORK/hub.log" "$evidence/hub.log"
+    chmod 600 "$evidence/hub.log"
+    echo "SMOKE evidence: $evidence/hub.log" >&2
+  fi
   rm -rf "$WORK" 2>/dev/null || true
-  if [ -n "$HUB_PID" ]; then kill "$HUB_PID" 2>/dev/null || true; fi
+  return "$rc"
 }
 trap cleanup EXIT
 
@@ -38,8 +51,19 @@ MACHINE="smoke-$(( $$ % 1000 ))"
 
 if [ -z "$ENDPOINT" ]; then
   # --- 本地模式：临时目录跑仓库副本，不污染真实 state/credentials ---
+  PORT_PYTHON="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+  [ -n "$PORT_PYTHON" ] || fail "无法分配本地 hub 端口：找不到 Python"
+  PORT="$($PORT_PYTHON - <<'PY'
+import socket
+
+with socket.socket() as listener:
+    listener.bind(("127.0.0.1", 0))
+    print(listener.getsockname()[1])
+PY
+)"
+  [ -n "$PORT" ] || fail "无法分配本地 hub 端口"
   mkdir -p "$WORK/state" "$WORK/credentials"
-  cp -r hub tools connectors report_schema.py requirements.txt "$WORK/"
+  cp -r hub tools connectors frontend agent_profiles.py report_schema.py session_schema.py platform_schema.py requirements.txt "$WORK/"
   # 隔离的白名单 hosts.yaml：仅冒烟机器 + projects: [demo]
   cat > "$WORK/hosts.yaml" <<EOF
 hosts:
@@ -54,14 +78,15 @@ EOF
   (
     cd "$WORK"
     AGENT_FLEET_INGEST_TOKEN="$INGEST_TOKEN" \
-      exec "$PY" hub/web.py --port 8799 --host 127.0.0.1 --dev-operator smoke@local
+      AGENT_FLEET_SESSION_REPOSITORIES_ENABLED=1 \
+      exec "$PY" hub/web.py --port "$PORT" --host 127.0.0.1 --dev-operator smoke@local
   ) > "$WORK/hub.log" 2>&1 &
   HUB_PID=$!
   LOCAL=1
-  ENDPOINT="http://127.0.0.1:8799"
+  ENDPOINT="http://127.0.0.1:$PORT"
   ready=0
   for _ in {1..30}; do
-    if curl -sf "$ENDPOINT/api/status" >/dev/null 2>&1; then ready=1; break; fi
+    if curl -sf "$ENDPOINT/healthz" >/dev/null 2>&1; then ready=1; break; fi
     sleep 0.3
   done
   [ "$ready" = 1 ] || fail "hub 未就绪（见 $WORK/hub.log）"
@@ -150,6 +175,20 @@ except Exception as exc:
 if not ok:
     print("RUNNER MISS: 本轮未领取到任务", file=sys.stderr)
     raise SystemExit(1)
+
+# Task success alone does not prove that Hub received the conversation.
+import json
+from urllib.request import urlopen
+records = list((cfg.cache_dir / 'conversations').glob('runner_*.json'))
+assert len(records) == 1, "expected one captured runner conversation"
+url = cfg.hub + '/api/sessions/' + records[0].stem + '/events?limit=1000'
+with urlopen(url, timeout=5) as response:
+    events = json.load(response)['events']
+assert any(e['kind'] == 'user_message' and e['payload'].get('text') == '写 hello.txt 并打印 done' for e in events), 'Hub missing user message'
+assert any(e['kind'] == 'source_record' and 'done' in e['payload'].get('text', '') for e in events), 'Hub missing agent source output'
+with urlopen(url, timeout=5) as response:
+    assert json.load(response)['events'] == events, 'conversation recovery changed'
+print('smoke: 4a. Hub 会话全文与重复读取 ✓')
 PYEOF
 
 SMOKE_HUB="$ENDPOINT" SMOKE_MACHINE="$MACHINE" SMOKE_SECRET="$RUNNER_SECRET" \
@@ -162,7 +201,13 @@ TASK=$(curl -sf "$ENDPOINT/api/tasks/$TASK_ID") || fail "获取任务详情失�
 STATE=$(printf '%s' "$TASK" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["task"]["state"])')
 [ "$STATE" = "succeeded" ] || fail "任务状态 $STATE != succeeded"
 printf '%s' "$TASK" | grep -q 'hello.txt' || fail "diff_stat 缺 hello.txt"
-info "5. 任务 succeeded + diff 含 hello.txt ✓"
+# Runner removes its execution worktree; recover the returned artifact from Hub.
+curl -sf "$ENDPOINT/api/tasks/$TASK_ID/diff" \
+  | "$PY" -c 'import json,sys; data=json.load(sys.stdin); assert not data["truncated"]; sys.stdout.write(data["diff_patch"])' \
+  > "$WORK/result.patch" || fail "读取完整 patch 失败"
+git -C "$PROJ" apply "$WORK/result.patch" || fail "Hub 返回 patch 无法恢复"
+[ "$(cat "$PROJ/hello.txt")" = hi ] || fail "恢复文件内容不符"
+info "5. 任务 succeeded + 实际文件内容 + diff 含 hello.txt ✓"
 
 # 5) SSE 可达（curl 超时退出码 28 属预期，只校验收到的首帧）
 SSE_OUT=$(curl -sN --max-time 2 "$ENDPOINT/api/stream" || true)
@@ -177,8 +222,8 @@ info "6. SSE 连接 ✓"
 PACKAGE_DIR="$WORK/frontend-release"
 bash deploy/package-frontend-release.sh "$PACKAGE_DIR" "smoke-$(( $$ % 1000 ))" >/dev/null \
   || fail "前端静态打包失败"
-for rel in index.html config.js api/client.js realtime/sse.js \
-           views/fleet.js views/machine.js views/task.js; do
+for rel in index.html config.js assets/api/client.js assets/realtime/sse.js \
+           assets/views/fleet.js assets/views/machine.js assets/views/task.js; do
   [ -f "$PACKAGE_DIR/$rel" ] || fail "前端 release 缺模块: $rel"
 done
 info "6a. 前端静态包含 index/config/client/SSE/视图模块 ✓"
@@ -206,7 +251,7 @@ cfg = FleetConfig(
     task_db=root / "state" / "fleet.db",
     ingest_token="",                            # 空 token 仅作开箱断言，不设生产状态
     tasks_enabled=False,
-    frontend_cutover=False,
+    serve_frontend=False,
     frontend_dir=fake_frontend,                 # 后端启动不读取任何前端文件
 )
 app = create_app(cfg)
@@ -239,7 +284,7 @@ cfg = FleetConfig(
     task_db=root / "state" / "fleet_tasks.db",
     ingest_token="",
     tasks_enabled=False,
-    frontend_cutover=False,
+    serve_frontend=False,
     frontend_dir=root / "no-such-frontend",
     session_repositories_enabled=True,
     session_db=root / "var" / "sessions" / "meta.db",

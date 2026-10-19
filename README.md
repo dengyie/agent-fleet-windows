@@ -1,186 +1,161 @@
-# agent-fleet
+# Agent Fleet
 
-AI agent 舰队观测系统 —— **push-only 架构**：各机器本地运行 probe，主动上报到 hub；hub 不反向连接机器。
+> **Lightweight, Zero-Trust AI Agent Fleet Monitoring & Orchestration System**  
+> 轻量级、零信任架构的分布式 AI Agent 舰队观测与受控调度系统。
 
-License: [MIT](LICENSE)。生产域名、内网拓扑和机清单不要提交；用 `hosts.yaml` 与 `deploy/*.example` 做本机副本。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python: 3.10+](https://img.shields.io/badge/python-3.10+-brightgreen.svg)](https://www.python.org/)
+[![Architecture: Push--Only](https://img.shields.io/badge/Architecture-Push--Only%20%2F%20Zero--Trust-orange.svg)](#-核心优势与架构亮点)
 
-> 接手入口：[docs/HANDOFF.md](docs/HANDOFF.md)
-> 架构说明：[docs/architecture-v3.md](docs/architecture-v3.md)
-> 页面开发链路：[docs/architecture-v4-control-plane.md](docs/architecture-v4-control-plane.md)
-> 路线 A 薄客户端控制台（Phase 1–5 接线；代码缺省仍关；Phase 4 native resume 无身份禁止 sibling spawn；**2026-09-08 LIVE 已开** `AGENT_FLEET_APPEND_USER_TURN_ENABLED` / `AGENT_FLEET_APPLY_LOCAL_PROFILE_ENABLED`）：[docs/superpowers/specs/2026-09-07-thin-client-remote-control-design.md](docs/superpowers/specs/2026-09-07-thin-client-remote-control-design.md)
+---
 
-## 架构
+## 💡 为什么选择 Agent Fleet？
+
+当你在多台开发机、VPS、云服务器上跑各类 AI Coding Agent（如 Claude Code、Codex CLI、Hermes、ZCode 等）时，通常面临三大痛点：
+1. **网络穿透与安全风险**：服务器分散在 NAT/内网或不同云厂商，中心端若直连 SSH 需要大量私钥或打洞，存在严重安全隐患。
+2. **状态碎片化**：无法一览所有机器上的 Agent 进程、活跃会话、系统负载与健康状况。
+3. **任务派发缺乏审计与沙箱**：远程控制容易变成“任意 shell 执行”，缺乏项目白名单、Lease 租约与脱敏审计机制。
+
+**Agent Fleet** 为此而生：
 
 ```
-┌─ 每台机器 ──────────────────────────────────┐
-│ tools/agent-self-report.py                  │
-│ 本地采集 Hermes / Claude Code / Codex / 通用进程 │
-│ 每 2 分钟 POST /api/ingest + token           │
+┌─ 各计算节点 (Mac / VPS / Container) ──────────┐
+│  • Probe (自上报探针): 采集 Agent 状态与系统指标  │
+│  • Runner (主动拉取执行器): 受控执行白名单任务   │
+│  • 出站 HTTPS 单向连接，无需公网入站与反向隧道  │
 └──────────────────────┬──────────────────────┘
+                       │ HTTPS POST /api/ingest (Push-only)
+                       │ HTTPS POST /api/commands/poll (Pull-based)
                        ▼
-┌─ hub（hub.example.com）──────────────────┐
-│ POST /api/ingest 认证、落盘、事件通知         │
-│ GET  /api/status 面板 API                   │
-│ hub/web.py 只读展示 + stale reconciliation   │
-│ POST /api/tasks 受控任务队列                 │
+┌─ Hub 控制中心 (Web API + 实时面板) ───────────┐
+│  • 统一状态面板 (SSE 毫秒级推送 / 响应式 Web 控制台) │
+│  • 双重字段脱敏白名单，敏感数据/Session 不出机    │
+│  • 基于 Lease + Attempt 的幂等任务队列与安全审计  │
 └─────────────────────────────────────────────┘
-
-runner: tools/agent-runner.py --once（每分钟主动 poll 任务）
 ```
 
-机器无需 SSH、无需反向隧道、无需中央私钥。自报告节点自动上墙；`hosts.yaml` 只提供展示描述和 stale TTL。
+---
 
-## Hub 启动
+## 🌟 核心优势
+
+- 🛡️ **绝对的 Push-Only 零信任安全**
+  - 各节点通过本地 Probe 主动上报、Runner 主动拉取。
+  - **Hub 绝不反向连接机器**：无需向中心暴露 SSH 私钥、无需公网入站端口、无需 FRP/内网穿透。
+- 🔒 **严格的隐私与数据脱敏**
+  - Probe 出站和 Hub API 双重白名单过滤，绝不上报代码上下文、完整会话正文、敏感环境变量或密钥。
+- 🤖 **多 Agent 生态原生支持**
+  - 开箱即用支持主流 Agent：**Claude Code**、**Codex CLI**、**ZCode**、**Hermes** 及通用进程。
+  - 自动识别进程状态、活跃会话计数与系统资源开销。
+- ⚡ **受控开发与任务编排（Command Plane）**
+  - 基于项目白名单 + 租约（Lease）+ 自动超期回收机制，杜绝任意 Shell 越权。
+  - 结果幂等缓存，断网重连自动恢复，有界 Diff 与日志快照回传。
+- 📊 **轻量级、现代化的实时控制台**
+  - 极简单文件 Hub 服务（Python 标准库 + 轻量 Flask），无笨重外部中间件依赖。
+  - 内置优雅的深浅色响应式 UI 与 SSE 实时状态流。
+
+---
+
+## 🚀 快速上手 (Quick Start)
+
+### 1. 启动 Hub（控制中心）
+
+在一台有固定访问地址的机器或 VPS 上启动 Hub：
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-export AGENT_FLEET_INGEST_TOKEN='generate-a-long-random-secret'
-.venv/bin/python hub/web.py --host 0.0.0.0 --port 8790
+# 克隆仓库并安装依赖
+git clone https://github.com/dengyie/agent-fleet.git
+cd agent-fleet
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# 设置 Ingest 通信 Token 并启动 Web 节点
+export AGENT_FLEET_INGEST_TOKEN='your-secure-random-secret'
+python hub/web.py --host 0.0.0.0 --port 8790
 ```
 
-hub 未配置 token 时会拒绝生产启动。token 不进 git、不写文档。
+启动后访问 `http://<hub-ip>:8790` 即可看到实时舰队控制台。
 
-示例部署：hub 默认听 `0.0.0.0:8790`（可用 `AGENT_FLEET_WEB_HOST=127.0.0.1` 只听 loopback），由宿主 Nginx 反代。路径用操作员提供的 `FLEET_HOME` / `FLEET_USER`，不要默认调用者 HOME。LIVE 切换：`FLEET_LIVE_MODE=symlink` 或 bind-mount 场景的 `overlay`（禁止对 bind-mount 做 `ln -s`）。容器镜像若自带 `site-packages/tools` 正规包，release 必须含 `tools/__init__.py`。只读探针：`deploy/hk-readonly-evidence.sh`。GitHub public `main` 不是现网 overlay。
+---
 
-## 机器 probe 部署
+### 2. 部署节点 Probe（状态采集探针）
 
-在每台机器部署项目目录（至少包含 `tools/`、`connectors/`、`hub/`），然后执行：
+在需要观测的任意开发机或云主机上：
 
 ```bash
+# 1. 本地测试采集（dry-run 模式）
+python3 tools/agent-self-report.py --dry-run --name worker-node-1
+
+# 2. 正式向 Hub 上报状态
 python3 tools/agent-self-report.py \
   --endpoint https://hub.example.com \
-  --name worker-a \
-  --token "$AGENT_FLEET_INGEST_TOKEN"
+  --name worker-node-1 \
+  --token "your-secure-random-secret"
 ```
 
-建议 cron 每 2 分钟执行。先用 dry-run 检查本地采集：
+> **推荐使用 Cron 定时上报**（每 2 分钟执行一次）：
+> ```cron
+> */2 * * * * python3 /path/to/agent-fleet/tools/agent-self-report.py --endpoint https://hub.example.com --name worker-node-1 --token "$AGENT_FLEET_INGEST_TOKEN" >/dev/null 2>&1
+> ```
 
-```bash
-python3 tools/agent-self-report.py --dry-run --name worker-a
-```
+> **Windows 节点发版来源（重要）**：本节点的权威版本化源码是私有仓库 `dengyie/agent-fleet-windows`，发版必须从该仓库执行 `deploy/package-release.sh`（`git archive HEAD`）。它与公开仓库 `dengyie/agent-fleet` 历史**无关**，后者不含 Windows 探针枚举（`tools/probe/discovery.py` 的 PowerShell 路径）；误用后者发版会移除本节点的 Windows 采集。详见 [Windows 节点源码与发版来源](docs/windows-node-source.md)。
 
-支持的本地采集器：
+---
 
-- `hermes`：gateway 状态、平台、会话数量
-- `claude_code`：项目数量、活跃项目数
-- `codex`：会话数量、活跃会话数
-- `generic`：匹配到的进程数量
+### 3. 配置 Runner（可选：受控任务调度）
 
-只上传计数、系统指标和状态，不上传会话内容。
-`report_schema.py` 对 probe 出站数据和 hub 公共状态执行同一套字段白名单；
-会话 ID、显示名、文件路径、命令行和 collector 原始输出不会进入公网 API。
+如果需要通过 Web 界面向该节点派发受控 AI 开发任务：
 
-## Runner 部署（受控开发链路）
+1. 配置白名单：
+   ```bash
+   cp deploy/agent-runner.yaml.example ~/.config/agent-fleet/runner.yaml
+   # 编辑 runner.yaml：配置允许调度的本地项目路径与 Agent 适配器
+   ```
+2. 启动 Runner 轮询：
+   ```bash
+   # 单次轮询测试
+   python3 tools/agent-runner.py --once
+   ```
 
-在每台执行开发任务的机器上，把 `deploy/agent-runner.yaml.example` 复制为
-`~/.config/agent-fleet/runner.yaml`（不进 git），并按本机填写项目白名单路径、
-adapter 命令模板与凭据文件。runner 凭据文件建议权限 0600。配置字段说明见样例内注释。
+---
 
-cron 单轮模式（每分钟检查一次新任务）：
+## 📡 Web & API 概览
 
-```cron
-* * * * * cd /path/to/agent-fleet && /usr/bin/python3 tools/agent-runner.py --once >> ~/.cache/agent-fleet/runner.log 2>&1
-```
+| 路径 / 接口 | 类型 | 功能说明 |
+|---|---|---|
+| `GET /` | Web UI | Fleet 舰队实时大盘（节点矩阵、系统状态、实时事件流） |
+| `GET /machine/<name>` | Web UI | 单机详情页（指标趋势、运行中的 Agent 列表） |
+| `GET /api/status` | REST API | 获取全局计算节点与 Agent 在线状态 |
+| `GET /api/stream` | SSE | 毫秒级实时事件推流（自动重连与离线补发） |
+| `POST /api/ingest` | REST API | 节点探针上报入口（需 `X-Agent-Fleet-Token` 认证） |
+| `POST /api/tasks` | REST API | 派发受控开发任务（白名单校验 + 幂等队列） |
 
-## Web API
+---
 
-- `GET /`：Fleet 总览（机器网格 + 实时事件流）
-- `GET /machine/<name>`：机器详情（系统指标 + agent 表 + 24h 在线时间线）
-- `GET /api/status`：当前机器状态
-- `GET /api/machines/<name>`：单机详情 + 历史
-- `GET /api/events`：最近事件摘要
-- `GET /api/stream`：SSE 实时事件流（断线自动重连并补发）
-- `POST /api/ingest`：机器主动上报，必须带 `X-Agent-Fleet-Token`
-- `POST /api/scan`：仅执行 stale reconciliation，必须带 token；不执行机器采集
-- `POST /api/tasks`：operator 创建开发任务（受控 command plane）
-- `GET /api/tasks` / `GET /api/tasks/<id>`：任务列表与详情（含结果摘要）
-- `POST /api/tasks/<id>/cancel` / `retry`：取消 / 重试任务
-- `POST /api/commands/poll` / `<attempt>/heartbeat` / `<attempt>/result`：runner pull 侧 API（runner credential 认证域）
-- 以下路由由 gate 控制（`AGENT_FLEET_*_ENABLED` / `fleet-gates.conf`，kwarg > env > 文件 > 默认关，显式 False 优先；开启顺序 Session → Supervisor → Adoption → AppendUserTurn → ApplyLocalProfile。**2026-09-01 生产三 gate 已全部开启**；**2026-09-08 LIVE 已加开** Phase 4 `append_user_turn` / Phase 5 `apply_local_profile`）：
-  - `GET/POST /api/sessions`、`GET /api/sessions/<id>`、`POST /api/session-events`（operator）
-  - `POST /api/supervisor/poll`、`POST /api/supervisor/receipts`（`X-Supervisor-Credential`）
-  - `GET/POST /api/adoptions`、`DELETE /api/adoptions/<session_id>`、`POST /api/adoptions/<session_id>/retry`、`POST /api/adoptions/<session_id>/capture-exact`（operator）
-  - `POST /api/adoption/<session_id>/source/control`（operator；仅五个固定动作；ingest/runner/supervisor 头 → 401）
-- Adoption-only（未开 session）时 `make_app` 把 adoption 失败关闭，observe 仍启动。不要只翻 adoption。
-- Exact capture 默认 `best_effort`，须 operator 显式 `capture-exact`，不随 gate 自动打开。
+## 测试与发布验收
 
-hub 进程默认每 60 秒自动执行一次 stale reconciliation。
+完整测试入口：[全流程测试与质量门禁](docs/testing/README.md)。[可执行流程矩阵](docs/testing/journeys.json)绑定必需用例；[测试链路与证据核验](docs/testing/test-chains.md)提供阶段断言、审查回归和可复制命令。CI 在打包前检查实际执行结果，缺失、跳过或失败均阻断。真实模型、邮件和节点按[发布验收手册](docs/testing/release-acceptance.md)分别验证。
 
-## 通知和 stale 状态
+main 在测试、前后端打包通过后进入[自动部署](deploy/auto-deploy.md)，使用 production 环境的受限 SSH 入口，保留运行数据与配置，探活失败时回滚代码和前端。PR 不部署，也不读取部署凭据。
 
-- 正常 heartbeat 不通知
-- gateway 异常、采集错误、系统阈值异常才产生告警
-- 默认超过 300 秒没有 heartbeat 的机器标记为 offline
-- `hosts.yaml` 可为节点设置 `stale_after_s`
+## Muse 工作区
 
-## 受控开发链路（v4）
+侧栏 **Muse**（`/muse`）可导入 Muse 登录态，直接查看和使用原生会话，不需要运行浏览器或 9222。支持最多 6 个对话窗口、原生子会话、引用回复、停止生成、按会话开启自动审批，以及浏览器任务、截图、文件和工具卡片。登录态按 Fleet 用户加密保存。使用步骤、限制与实测记录见 [Muse 工作区](docs/platform/muse-workspace.md)。
 
-浏览器 → CF Access → `POST /api/tasks` → SQLite 任务队列 → agent runner 主动 poll
-→ 本地 worktree + adapter（codex/claude_code/hermes）→ 有界日志/diff 回传 → 页面实时展示。
+此前的 [本地浏览器桥接](docs/platform/muse-browser-bridge.md) 作为可选的 Assistant 执行节点保留；使用 Muse 栏目不需要配置该桥接。
 
-- 任务创建要求目标机器在线且项目在 hosts.yaml `projects` 白名单内
-- runner 只执行白名单项目 + 注册 adapter，无任意 shell 接口
-- lease 300s + 30s 心跳；runner 崩溃任务自动回队列重派
-- 结果幂等（attempt_id），网络失败本地缓存重传
+## 📖 进阶文档
 
-`GET /api/tasks/<id>/files/<path>` 已落地：runner 在 result 附有界脱敏快照，Hub 本地读（operator 认证、限速、审计）。延期（条件触发，不是待办）：WebSocket 无替换 SSE 计划。权威清单见 `docs/HANDOFF.md` §六。
+- [系统架构详解 (Architecture v3)](docs/architecture-v3.md)
+- [受控开发链路设计 (Control Plane v4)](docs/architecture-v4-control-plane.md)
+- [前后端分离与发布规范 (Frontend Release Layout)](deploy/frontend-release-layout.md)
+- [交接与运维手册 (Handoff Guide)](docs/HANDOFF.md)
 
-## 纳管生命周期（adoption）
+---
 
-Operator 经 `/api/adoptions` 显式纳管座机会话，生命周期 `pending → adopted → revoked` 已闭环：
+## 📄 License
 
-- probe 接受纳管并回执 `adopted` 后，`pending → adopted`（幂等）；受控 source 面板只对 `adopted` 座席出现 5 个固定动作。
-- 显式撤销 / 漂移自动撤销都把座席置 `revoked` 并只入队一次 detach——**detach 从不发送信号**。
-- 漂移撤销（保卫器拒绝且 reason 属于固定漂移码集）追加一条 `adoption_drift` 有界审计（只含 reason + policy，无 pid/exe/cmdline 明文）。
-- 关闭 `adoption_repositories_enabled` 时不建 adoption 服务，`/api/adoptions` operator 表面不可用：完整产品上（SSR/静态 `/<path>` catch-all 已挂载）未注册路径的 POST 返回有界 405 `method_not_allowed`；仅当该 catch-all 路由也被移除时才是 404 `not_found`。既有的 `/api/*`、`/api/v1`、task/runner/SSE 与前端契约不变。
-- 证据路径：签名回执经 `SupervisorReceiptHook` 扇出到 adoption 服务，审计落在独立 adoption transcript DB；验收只比较固定有界码。
+本项目基于 [MIT License](LICENSE) 开源。欢迎 Star、Issue 与 Pull Request！
 
-## 前后端分离发布与回滚
+### 账号体系（通过配置启用）
 
-后端与静态前端是两个可独立发布、回滚的 release。细节见
-[deploy/frontend-release-layout.md](deploy/frontend-release-layout.md)。
-
-- **backend**: 仓库 Python 包 + `requirements.txt`；启动 JSON API 不需要任何 `frontend/` 文件。
-- **frontend**: `frontend/` 静态文件，纯静态服务器即可发布：
-
-```bash
-deploy/package-frontend-release.sh /tmp/agent-fleet-frontend 99.0.0   # 打包（显式输出目录+版本）
-bash deploy/test-static-frontend.sh                                    # 静态纯服务器冒烟
-```
-
-- 打包脚本 fail-closed：任何命中 `credentials`/`state`/`runner-credential`/`ingest-token`/
-  `.env`/`*.pem`/`*.key` 的路径即整体拒绝且不产生任何输出；不用 npm/构建链，不访问外部
-  网络或生产端点。`manifest.json` 只含调用者提供的版本与稳定排序的文件清单。
-- **缓存**：带内容哈希的 `/assets/*` 可长期 immutable；`index.html`/`config.js` 是运行时
-  入口，**不得**长期缓存。
-- **发布顺序**：backend 先于 frontend 上线新 client 依赖的字段/`/api/v1`。
-- **回滚**：frontend 只切换静态 release，不影响 probe/runner/state；backend 回滚必须
-  保留 JSONL、SQLite schema 与旧 `/api/*` 路径，不得破坏未完成的 task lease。
-
-也正是这个独立 release 拓扑：
-
-- **旧 `/api/*` 与 `/api/v1` 兼容**：`/api/v1/*` 是旧 `hub.http.*` view 的版本化兼容表面，复用同一
-  callable；旧 `/api/*` 仍是权威路径（含 probe/runner、SSE），未做任何破坏性路由迁移。
-- **同源拓扑**：浏览器同源——`/` 与前端静态 release 同域，`/api/*` 走后端；不需要 CORS。
-  示例见 `deploy/nginx-frontend-backend.example.conf`，路由/回滚细节见
-  `deploy/frontend-release-layout.md`。
-- **SSE 代理要求**：`/api/stream` 反向代理必须关闭 `proxy_buffering` 并设置长读超时
-  （详见 nginx 示例注释）；否则 SSE 首帧会被缓冲、长连接会被代理改写。
-- **本仓库只做本地验收**：独立 release 打包/启动/路由/E2E 全部在本地回环验证；
-  **本次未做任何生产部署**，不触碰线上 Nginx、Cloudflare 或现有机器配置。
-
-## 依赖和测试
-
-```bash
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python -m unittest discover -s tests -v
-python3 -m compileall -q connectors hub tools tests
-```
-
-## 安全红线
-
-- token、私钥、凭据不进入 git 或文档
-- ingest machine 名称经过路径安全校验
-- state current JSON 原子替换，避免并发写损坏
-- probe 出站和 hub 公共 API 双重应用字段白名单
+支持邮箱验证码注册、邮箱密码登录、密码找回、个人资料、会话撤销及管理员账号管理。配置接口、权限边界和现有数据归属限制见 [账号管理说明](docs/account-management.md)。

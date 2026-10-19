@@ -160,7 +160,7 @@ Task detail
 - operator SSO/Cloudflare Access；**done**（边缘 Access；adoptions 另有 Nginx email 注入）
 - runner credential 轮换和吊销；**SOP 本轮**（`deploy/rotate-runner-credential.sh`，默认不连生产）
 - 审计保留策略、告警和备份恢复演练；审计随 SQLite；告警保持 stdout→cron（TG 仍延期）；备份演练 **清单本轮**（`deploy/hk-backup-drill.md`）
-- 部署脚本和回滚验证；§0 手工 SOP **done**；main 自动部署仍禁止
+- 部署脚本和回滚验证；§0 手工 SOP **done**。main 自动部署于 2026-10-04 经用户授权并已实现，部署模式与证据见 [`docs/HANDOFF.md`](HANDOFF.md)；2026-10-09 隔离 Linux overlay 故障注入通过，production UID/LIVE 验收仍开放。
 
 ## 6.5 会话数据面与 Supervisor 控制面（Task 12 扩展）
 
@@ -209,6 +209,49 @@ Adoption 审计写入 session transcript。`make_app` **不会**在只开 adopti
 
 Operator 表面：`/api/adoptions`、`/api/adoptions/<session_id>/retry`、`/api/adoptions/<session_id>/capture-exact`、`POST /api/adoption/<session_id>/source/control`（五个固定动作）。ingest / runner / supervisor 凭据头不能当 operator。公开 JSON 不含 raw pid / path / cmdline。`detach` 不发信号；`terminate` 先做身份守卫。
 
+## 6.7 CoDock-inspired AI 管理扩展（2026-10）
+
+本扩展将生命周期可见性、结构化问题、会话接力、脱敏搜索和用量汇总组合在已有
+session data plane、Supervisor 和 platform usage ledger 上。没有新增运行时依赖，也
+没有改变 push-only ingest、runner pull、Supervisor 签名命令或 task attempt 语义。
+
+### 状态和交互
+
+受管会话保存状态投影并在 transcript 保留状态事件。状态来源优先级固定为
+supervisor > hook > structured_stream > native_transcript > pty，按事件 sequence
+拒绝过期覆盖；非受管会话维持 best_effort，不能借结构化事件提升控制或状态能力。
+PTY 静默不是等待用户的证据。结构化问题只有在能力声明
+interactive_questions 存在时才可回答；答案仍走现有签名 append_user_turn，
+请求回执和问题状态持久化支持幂等重试。
+
+SessionRepository 的 additive schema v3 增加状态投影及 interaction_requests。
+迁移失败时将管理扩展标记不可用，保留已有 session 和 transcript 路径。
+
+### 接力和搜索
+
+接力由 operator API 读取结构化预览，确认后创建新的 task、attempt 和 handoff receipt；
+它不复用原 session 的执行身份。接力内容由纯确定性抽取生成，不调用模型；只接受
+当前注册项目与相对安全路径，不带入加密 raw transcript。事务内持久化幂等回执，
+并发同 token 冲突返回固定 409。
+
+搜索使用独立 SQLite 读模型，gate 为
+AGENT_FLEET_SESSION_SEARCH_ENABLED，默认关闭。索引只从已保存的脱敏事件构建；
+FTS5 负责通常查询，受限 bigram 表支持中文双字查询。过滤与分页有界，索引失败不
+回滚 transcript 写入。未包含后台重建或历史回填；raw transcript 的保留策略与搜索
+索引保留策略分别管理。
+
+### 用量和发布边界
+
+用量汇总复用 platform usage ledger，按认证 operator 的 owner scope 查询；
+Decimal 字符串保留费用精度，provider、configured、unknown 明确说明费用来源，
+未知输入不填零。汇总 migration 以 additive ALTER 扩展旧表；迁移失败只关闭新汇总
+读取，原预算和 settlement ledger 继续工作。
+
+新 UI 静态模块纳入 frontend release 文件清单。搜索 gate 默认关闭；关闭或初始化失败
+不影响 session ingest。状态及交互依赖现有 session/Supervisor gate 与 capability；
+接力需任务和 Supervisor 可用；用量 API 依赖 platform 服务。发布顺序仍为 backend
+先于 frontend，回滚时保留已迁移数据库和 transcript，关闭对应新表面即可。
+
 ## 7. 明确不做的事
 
 - hub 通过 SSH、反向隧道或中央私钥执行 agent 命令；
@@ -217,4 +260,3 @@ Operator 表面：`/api/adoptions`、`/api/adoptions/<session_id>/retry`、`/api
 - 把 ingest token、runner credential 或私钥嵌入前端资源；
 - 用“任意 shell”接口替代 adapter 和项目白名单。
 - 在未恢复公网 `/api/status` 之前打开 session / supervisor / adoption gate。
-

@@ -64,6 +64,8 @@ SCHEMA_VERSION = 1
 
 DEFAULT_MAX_RAW_BYTES = 256 * 1024 * 1024  # 256 MiB default Hub raw budget
 DEFAULT_RAW_RETENTION_DAYS = 14
+DEFAULT_RAW_PURGE_BATCH_SIZE = 500
+MAX_RAW_PURGE_BATCH_SIZE = 1000
 
 # AEAD key contract (aligned with tools.session.crypto.KEY_LENGTH).
 _AEAD_KEY_LENGTH = 32
@@ -213,12 +215,26 @@ class TranscriptRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_redacted_session
                     ON redacted_events(session_id, sequence);
+                CREATE INDEX IF NOT EXISTS idx_redacted_session_kind
+                    ON redacted_events(session_id, kind, sequence);
                 CREATE INDEX IF NOT EXISTS idx_raw_retention
                     ON raw_events(retention_until);
                 CREATE INDEX IF NOT EXISTS idx_policy_session
                     ON policy_signals(session_id);
+                CREATE INDEX IF NOT EXISTS idx_policy_session_time
+                    ON policy_signals(session_id, emitted_at);
                 """
             )
+            # Enforce the stream ordering identity when legacy data is clean.
+            # If an old database already contains conflicts, keep it writable
+            # and let the application conflict check return a bounded error.
+            duplicate = conn.execute(
+                "SELECT 1 FROM redacted_events GROUP BY machine_id, session_id, COALESCE(stream_id,''), sequence "
+                "HAVING COUNT(*) > 1 LIMIT 1").fetchone()
+            if duplicate is None:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_redacted_stream_sequence "
+                    "ON redacted_events(machine_id, session_id, COALESCE(stream_id,''), sequence)")
             conn.execute(
                 "INSERT OR REPLACE INTO meta (key, value)"
                 " VALUES ('schema_version', ?)",
@@ -375,6 +391,10 @@ class TranscriptRepository:
 
         conn = self._connect()
         try:
+            # Serialize duplicate/sequence/quota admission with the writes
+            # that publish this event.  In particular, the per-session raw
+            # byte budget must not be checked against a stale concurrent view.
+            conn.execute("BEGIN IMMEDIATE")
             # Duplicate check against the redacted stream (the write key),
             # scoped per session so two sessions may share an event_id.
             existing = conn.execute(
@@ -382,6 +402,7 @@ class TranscriptRepository:
                 (session_id, event_id),
             ).fetchone()
             if existing:
+                conn.rollback()
                 return IngestResult("duplicate", event_id=event_id,
                                     reason=None, raw_written=False)
 
@@ -394,7 +415,32 @@ class TranscriptRepository:
             is_gap = sequence > max_seq + 1
 
             # Redact the clean event deterministically.
-            redacted, _report = Redactor().redact_event(clean)
+            # source_record is an explicitly complete operator archive;
+            # normalized message/tool previews retain their existing redaction.
+            redacted = clean if clean["kind"] == "source_record" else Redactor().redact_event(clean)[0]
+
+            sequence_row = conn.execute(
+                "SELECT session_id, event_id, kind, redacted_json FROM redacted_events "
+                "WHERE machine_id=? AND session_id=? AND COALESCE(stream_id,'')=COALESCE(?, '') AND sequence=? "
+                "LIMIT 1", (clean.get("machine_id"), session_id, clean.get("stream_id"), sequence)).fetchone()
+            if sequence_row is not None and (
+                    sequence_row["session_id"] != session_id
+                    or sequence_row["event_id"] != event_id):
+                incoming_compare = dict(redacted)
+                existing_compare = dict(json.loads(sequence_row["redacted_json"]))
+                incoming_compare.pop("event_id", None)
+                existing_compare.pop("event_id", None)
+                incoming_json = json.dumps(incoming_compare, ensure_ascii=True,
+                                            sort_keys=True, separators=(",", ":"))
+                existing_json = json.dumps(existing_compare, ensure_ascii=True,
+                                           sort_keys=True, separators=(",", ":"))
+                if (sequence_row["session_id"] == session_id
+                        and incoming_json == existing_json
+                        and sequence_row["kind"] == kind):
+                    return IngestResult("duplicate", event_id=event_id,
+                                        reason=None, raw_written=False)
+                return IngestResult("rejected", event_id=event_id,
+                                    reason="sequence_conflict", raw_written=False)
 
             # Raw quota: the cap is on total raw bytes stored PER SESSION when
             # many sessions share this repository.  Compute what adding this
@@ -421,11 +467,17 @@ class TranscriptRepository:
                     # redacted stream durable, bounded raw unavailable, never
                     # plaintext.
                     status = "gap" if is_gap else "accepted"
-                    self._persist_redacted(conn, clean, redacted)
+                    try:
+                        self._persist_redacted(conn, clean, redacted)
+                    except sqlite3.IntegrityError:
+                        return IngestResult("rejected", event_id=event_id,
+                                            reason="sequence_conflict", raw_written=False)
+                    conn.commit()
                     return IngestResult(status, event_id=event_id,
                                         reason="raw_write_failed",
                                         raw_written=False)
                 if projected > self._max_raw_bytes:
+                    conn.rollback()
                     if quality == "best_effort":
                         return IngestResult(
                             "gap", event_id=event_id,
@@ -435,7 +487,11 @@ class TranscriptRepository:
                         reason="raw_quota_exceeded", raw_written=False)
 
             # Persist the redacted row first (durable even if raw fails).
-            self._persist_redacted(conn, clean, redacted)
+            try:
+                self._persist_redacted(conn, clean, redacted)
+            except sqlite3.IntegrityError:
+                return IngestResult("rejected", event_id=event_id,
+                                    reason="sequence_conflict", raw_written=False)
 
             raw_written = False
             reason = None
@@ -455,14 +511,46 @@ class TranscriptRepository:
                     raw_written = False
 
             status = "gap" if is_gap else "accepted"
+            conn.commit()
             return IngestResult(status, event_id=event_id,
                                 reason=reason, raw_written=raw_written)
         finally:
+            if conn.in_transaction:
+                conn.rollback()
             conn.close()
 
     # -- redacted read ----------------------------------------------------------------
 
-    def read_redacted(self, session_id: str, *, limit: int = 100) -> list[dict]:
+    def read_redacted_events(self, session_id: str, event_ids: list[str]) -> list[dict]:
+        """Read a bounded accepted batch for derived projections; never raw data."""
+        self._validate_session_id(session_id)
+        if not isinstance(event_ids, list) or len(event_ids) > 100:
+            raise TranscriptError("invalid_batch")
+        if any(not isinstance(value, str) or not value or len(value) > 256 for value in event_ids):
+            raise TranscriptError("invalid_event_id")
+        ids = tuple(dict.fromkeys(event_ids))
+        if not ids:
+            return []
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT event_id,session_id,stream_id,machine_id,sequence,kind,"
+                "capture_quality,emitted_at,redacted_json FROM redacted_events"
+                " WHERE session_id=? AND event_id IN (" + ",".join("?" for _ in ids)
+                + ") ORDER BY sequence ASC LIMIT 100", (session_id, *ids)).fetchall()
+            result = []
+            for row in rows:
+                parsed = json.loads(row["redacted_json"])
+                item = {key: row[key] for key in row.keys() if key != "redacted_json"}
+                item["payload"] = parsed.get("payload") if isinstance(parsed, dict) else None
+                result.append(item)
+            return result
+        except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
+            raise TranscriptError("transcript_unavailable") from exc
+        finally:
+            conn.close()
+
+    def read_redacted(self, session_id: str, *, limit: int = 100, after_sequence: int = 0) -> list[dict]:
         self._validate_session_id(session_id)
         try:
             bounded = max(1, min(int(limit), 1000))
@@ -473,9 +561,9 @@ class TranscriptRepository:
             rows = conn.execute(
                 "SELECT event_id, session_id, stream_id, machine_id, sequence,"
                 " kind, capture_quality, emitted_at, redacted_json"
-                " FROM redacted_events WHERE session_id=?"
+                " FROM redacted_events WHERE session_id=? AND sequence>?"
                 " ORDER BY sequence ASC LIMIT ?",
-                (session_id, bounded)).fetchall()
+                (session_id, max(0, int(after_sequence)), bounded)).fetchall()
         finally:
             conn.close()
         out: list[dict[str, Any]] = []
@@ -491,13 +579,88 @@ class TranscriptRepository:
                 "session_id": row["session_id"],
                 "stream_id": row["stream_id"],
                 "machine_id": row["machine_id"],
-                "sequence": int(row["sequence"]),
+                # Keep the SQLite scalar intact.  The application DTO boundary
+                # validates the sequence and can degrade a corrupt row to a
+                # bounded skeleton instead of turning one bad row into a 503.
+                "sequence": row["sequence"],
                 "kind": row["kind"],
                 "capture_quality": row["capture_quality"],
                 "emitted_at": row["emitted_at"],
                 "payload": payload,
             })
         return out
+
+    def read_handoff_events(self, session_id: str, *, limit: int = 1000) -> tuple[list[dict], bool]:
+        """First user goal plus a bounded latest window, from redacted storage only."""
+        self._validate_session_id(session_id)
+        bounded = max(2, min(int(limit), 1000))
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN")
+            first = conn.execute(
+                "SELECT event_id, sequence, kind, capture_quality, redacted_json"
+                " FROM redacted_events WHERE session_id=? AND kind='user_message'"
+                " ORDER BY sequence LIMIT 1", (session_id,)).fetchone()
+            rows = conn.execute(
+                "SELECT event_id, sequence, kind, capture_quality, redacted_json"
+                " FROM redacted_events WHERE session_id=? ORDER BY sequence DESC LIMIT ?",
+                (session_id, bounded + 1)).fetchall()
+            conn.execute("COMMIT")
+        finally:
+            conn.close()
+        truncated = len(rows) > bounded
+        rows = rows[:bounded]
+        if first and all(row["event_id"] != first["event_id"] for row in rows):
+            truncated = truncated or len(rows) == bounded
+            rows = rows[:bounded - 1]
+            rows.append(first)
+        out = []
+        for row in rows:
+            try:
+                parsed = json.loads(row["redacted_json"])
+            except (ValueError, TypeError, RecursionError) as exc:
+                raise TranscriptError("invalid_handoff_event") from exc
+            payload = parsed.get("payload") if isinstance(parsed, dict) else None
+            # Do not copy source_record or other non-allowlisted fields.
+            out.append({"event_id": row["event_id"], "sequence": row["sequence"],
+                        "kind": row["kind"], "capture_quality": row["capture_quality"],
+                        "payload": payload})
+        return out, truncated
+
+    def read_handoff_signals(self, session_id: str) -> list[dict]:
+        self._validate_session_id(session_id)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT severity, reason FROM policy_signals WHERE session_id=?"
+                " ORDER BY emitted_at DESC, rowid DESC LIMIT 20", (session_id,)).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def contiguous_sequence(self, session_id: str, start: int = 0) -> int:
+        """Return the highest contiguous durable sequence after start."""
+        self._validate_session_id(session_id)
+        try:
+            cursor = max(0, int(start))
+        except (TypeError, ValueError):
+            cursor = 0
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT sequence FROM redacted_events WHERE session_id=?"
+                " AND sequence>? ORDER BY sequence ASC",
+                (session_id, cursor),
+            )
+            for row in rows:
+                sequence = int(row["sequence"])
+                if sequence == cursor + 1:
+                    cursor = sequence
+                elif sequence > cursor + 1:
+                    break
+        finally:
+            conn.close()
+        return cursor
 
     # -- raw read --------------------------------------------------------------------
 
@@ -618,37 +781,57 @@ class TranscriptRepository:
 
     # -- retention / purge --------------------------------------------------------
 
-    def purge_expired_raw(self, now: str) -> list[str]:
+    def purge_expired_raw(
+        self,
+        now: str,
+        *,
+        limit: int = DEFAULT_RAW_PURGE_BATCH_SIZE,
+    ) -> list[str]:
         """Delete raw rows past ``retention_until``; never redacted rows.
 
-        Returns the removed event ids.  Audits each purge with a count, no
-        deleted content.
+        Removes at most ``limit`` rows in one atomic batch. Returns the removed
+        event ids and audits each deletion with the batch count, no content.
         """
-        conn = self._connect()
+        if type(limit) is not int or not 1 <= limit <= MAX_RAW_PURGE_BATCH_SIZE:
+            raise TranscriptError("invalid_purge_limit")
+
+        conn = None
         try:
+            conn = self._connect()
+            conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
                 "SELECT session_id, event_id FROM raw_events"
-                " WHERE retention_until <= ?",
-                (now,)).fetchall()
+                " WHERE retention_until <= ?"
+                " ORDER BY retention_until ASC, rowid ASC LIMIT ?",
+                (now, limit)).fetchall()
             removed_ids = [r["event_id"] for r in rows]
-            ts = _now_iso()
-            for row in rows:
-                conn.execute(
-                    "DELETE FROM raw_events WHERE session_id=? AND event_id=?"
-                    " AND retention_until <= ?",
-                    (row["session_id"], row["event_id"], now))
-                self._append_audit(
-                    conn, ts, "retention", _AUDIT_RAW_PURGE,
-                    target=row["event_id"], detail=str(len(removed_ids)))
+            if rows:
+                ts = _now_iso()
+                for row in rows:
+                    conn.execute(
+                        "DELETE FROM raw_events WHERE session_id=? AND event_id=?"
+                        " AND retention_until <= ?",
+                        (row["session_id"], row["event_id"], now))
+                    self._append_audit(
+                        conn, ts, "retention", _AUDIT_RAW_PURGE,
+                        target=row["event_id"], detail=str(len(removed_ids)))
+            conn.commit()
             return removed_ids
+        except Exception as exc:
+            if conn is not None and conn.in_transaction:
+                conn.rollback()
+            raise TranscriptError("transcript_store") from exc
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
 
 __all__ = [
     "DEFAULT_MAX_RAW_BYTES",
+    "DEFAULT_RAW_PURGE_BATCH_SIZE",
     "DEFAULT_RAW_RETENTION_DAYS",
     "IngestResult",
+    "MAX_RAW_PURGE_BATCH_SIZE",
     "SCHEMA_VERSION",
     "TranscriptError",
     "TranscriptRepository",

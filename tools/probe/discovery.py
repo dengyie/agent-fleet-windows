@@ -25,6 +25,8 @@ Guarantees used by the rest of the probe/hub pipeline:
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import re
 import shutil
@@ -35,6 +37,7 @@ from datetime import datetime
 from typing import Any, Iterator
 
 from agent_profiles import OBSERVABLE_AGENT_TYPES, PROFILES
+from tools.local_process import run as run_local
 
 # ---------------------------------------------------------------------------
 # fixed boundaries (schema boundary for Task 1)
@@ -46,6 +49,7 @@ MAX_NATIVE_PATH_CHARS = 512
 MAX_STARTED_AT_CHARS = 32
 
 PS_TIMEOUT_S = 10.0
+POWERSHELL_TIMEOUT_S = 15.0
 
 # Fixed bounded code for whole-discovery failure; callers branch on it.
 DISCOVERY_ERROR_CODE = "discovery_error"
@@ -131,15 +135,11 @@ _last_enumerate_failed: bool = False
 # bounded local subprocess helpers
 # ---------------------------------------------------------------------------
 
-# Windows: pythonw（无控制台）spawn ``ps`` 会新建可见 conhost 闪窗；隐藏之。
-# POSIX 无此语义，置 0。
-_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-
 
 def _run_ps(argv: list[str], timeout: float = PS_TIMEOUT_S) -> str:
     """Run one bounded local ``ps``; returns stdout, or ``""`` on any failure."""
     try:
-        result = subprocess.run(
+        result = run_local(
             ["ps", *argv],
             capture_output=True,
             stdin=subprocess.DEVNULL,
@@ -147,13 +147,116 @@ def _run_ps(argv: list[str], timeout: float = PS_TIMEOUT_S) -> str:
             timeout=timeout,
             cwd=tempfile.gettempdir(),
             env=_PS_ENV,
-            creationflags=_NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError, ValueError, UnicodeDecodeError):
         return ""
     if result.returncode != 0:
         return ""
     return (result.stdout or "")
+
+
+def _run_powershell_json(script: str, timeout: float = POWERSHELL_TIMEOUT_S):
+    """Run a fixed local Windows process query and decode its JSON output."""
+    if os.name != "nt":
+        return None
+    executable = (shutil.which("powershell.exe")
+                  or shutil.which("powershell") or "powershell.exe")
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    try:
+        result = run_local(
+            [executable, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+            cwd=tempfile.gettempdir(),
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        raw = result.stdout.decode("utf-8", "replace").strip()
+        return json.loads(raw) if raw else []
+    except (UnicodeError, ValueError, TypeError):
+        return None
+
+
+def _enumerate_windows_process_rows() -> list[ProcRow] | None:
+    """Read matching Windows processes through the built-in CIM provider.
+
+    ``Win32_Process.GetOwner`` is a per-process RPC and is unexpectedly slow
+    on this host (dozens of calls can exceed the discovery timeout).  Run it
+    only after a narrow CLI candidate filter so unrelated Electron/browser
+    helpers are neither queried nor treated as agent CLIs.  The owner value
+    remains necessary for same-user attachability checks.
+    """
+    script = r'''
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$rows = @(
+  Get-CimInstance Win32_Process |
+    Where-Object {
+      $name = [string]$_.Name
+      $cmd = [string]$_.CommandLine
+      $direct = $name -match '(?i)^(codex|codex-cli|claude|hermes|pi|zcode|opencode|aider|astrabot|openclaw)(\.exe)?$'
+      $interpreter = $name -match '(?i)^(node|python|python3|bun|deno|npm|npx)(\.exe)?$'
+      $script_cli = $cmd -match '(?i)(^|[\\/ "])(codex|claude|zcode|hermes|opencode|aider|astrabot|openclaw)(\.c?js|\.py)?([ "]|$)'
+      # ZCode's desktop launcher and Electron children share ZCode.exe.  Only
+      # keep its CLI forms, whose command line names the bundled zcode.cjs.
+      ($direct -and (($name -notmatch '(?i)^zcode(\.exe)?$') -or
+        ($cmd -match '(?i)zcode\.cjs'))) -or ($interpreter -and $script_cli)
+    } |
+    ForEach-Object {
+      $user = ''
+      try {
+        $owner = Invoke-CimMethod -InputObject $_ -MethodName GetOwner
+        if ($owner.ReturnValue -eq 0) { $user = [string]$owner.User }
+      } catch { }
+      $created = ''
+      try { $created = $_.CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') } catch { }
+      [pscustomobject]@{
+        User = $user
+        ProcessId = [int]$_.ProcessId
+        ParentProcessId = [int]$_.ParentProcessId
+        ExecutablePath = [string]$_.ExecutablePath
+        CommandLine = [string]$_.CommandLine
+        Name = [string]$_.Name
+        CreationUtc = $created
+      }
+    }
+)
+@($rows) | ConvertTo-Json -Compress -Depth 3
+'''
+    payload = _run_powershell_json(script)
+    if payload is None:
+        return None
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list):
+        return None
+    rows: list[ProcRow] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        try:
+            pid = int(item.get("ProcessId"))
+            ppid = int(item.get("ParentProcessId") or 0)
+        except (TypeError, ValueError):
+            continue
+        if pid <= 0:
+            continue
+        name = str(item.get("Name") or "")
+        rows.append(ProcRow(
+            user=str(item.get("User") or ""),
+            pid=pid,
+            pgid=pid,
+            exe_path=str(item.get("ExecutablePath") or name),
+            cmdline=str(item.get("CommandLine") or name),
+            started_at=str(item.get("CreationUtc") or ""),
+            ppid=ppid,
+            comm=name,
+        ))
+    return rows
 
 
 def _iter_lines(text: str) -> Iterator[str]:
@@ -196,14 +299,44 @@ def _argv0(args: str) -> str:
     return args.split(None, 1)[0].strip()
 
 
+def _argv_tokens(args: str) -> list[str]:
+    """按空白切分 argv，但成对引号内的空白不切分（引号本身剥除）。
+
+    WMI/ps 采集的 cmdline 保留引号原样（``node "C:\\Program Files\\x.cjs"``
+    之类），朴素 whitespace split 会把含空格路径截断在第一个空格。未闭合
+    引号退化为「取到串尾」，与 cmd/POSIX 的宽容解析一致。
+    """
+    tokens: list[str] = []
+    i, n = 0, len(args)
+    while i < n:
+        while i < n and args[i].isspace():
+            i += 1
+        if i >= n:
+            break
+        if args[i] in ('"', "'"):
+            close = args.find(args[i], i + 1)
+            if close == -1:
+                tokens.append(args[i + 1:])
+                break
+            tokens.append(args[i + 1:close])
+            i = close + 1
+        else:
+            j = i
+            while j < n and not args[j].isspace():
+                j += 1
+            tokens.append(args[i:j])
+            i = j
+    return tokens
+
+
 def _argv1(args: str) -> str:
     """Second argv token (script path for interpreter-run CLIs like node)."""
-    parts = args.split(None, 2) if args else []
-    return parts[1].strip() if len(parts) > 1 else ""
+    tokens = _argv_tokens(args) if args else []
+    return tokens[1].strip() if len(tokens) > 1 else ""
 
 
 def _token_basename(token: str) -> str:
-    """跨平台 argv token 的 basename：剥引号后同时按 / 与 \ 切分。
+    """跨平台 argv token 的 basename：剥引号后按斜杠和反斜杠切分。
 
     ps/WMI 采集的 cmdline 可能带引号且分隔符与采集机相关（Windows 反斜杠
     + 引号包裹的含空格路径）；本函数不依赖运行平台语义，保证分类结果
@@ -256,6 +389,11 @@ def enumerate_process_rows() -> list[ProcRow]:
     one without poisoning the rest.
     """
     global _last_enumerate_failed
+    if os.name == "nt":
+        windows_rows = _enumerate_windows_process_rows()
+        _last_enumerate_failed = windows_rows is None
+        return windows_rows or []
+
     text = _run_ps(["-eo", _PS_FIELDS])
     if not text:
         _last_enumerate_failed = True
@@ -304,7 +442,9 @@ def classify_family(exe_path: str, cmdline: str) -> str | None:
     """
     if not exe_path:
         return None
-    base = os.path.basename(exe_path).strip().lower()
+    base = _token_basename(exe_path).strip().lower()
+    if base.endswith(".exe"):
+        base = base[:-4]
     if base:
         for family, aliases in _FAMILY_BASENAMES.items():
             if base in aliases:
@@ -315,6 +455,8 @@ def classify_family(exe_path: str, cmdline: str) -> str | None:
     # ``node .../resources/glm/zcode.cjs``）。只检查这一个 token，
     # 不做全命令行扫描——``grep codex`` 之类的 helper 永不误分类。
     script_base = _token_basename(_argv1(cmdline or "")).lower()
+    if script_base.endswith(".exe"):
+        script_base = script_base[:-4]
     if script_base:
         for family, aliases in _FAMILY_BASENAMES.items():
             if script_base in aliases:
@@ -329,6 +471,13 @@ def classify_family(exe_path: str, cmdline: str) -> str | None:
 def current_user() -> str:
     """Current local user name (best effort, never raises)."""
     import getpass
+    if os.name == "nt":
+        # NSSM services run as LocalSystem on this machine while inspecting
+        # the interactive user's CLI processes.  The service wrapper sets a
+        # bounded identity hint so attachability remains user-scoped.
+        hinted = os.environ.get("AGENT_FLEET_LOCAL_USER", "").strip()
+        if hinted:
+            return hinted[:128]
     try:
         user = getpass.getuser()
     except Exception:
@@ -458,7 +607,7 @@ def native_path_for(row: ProcRow) -> str | None:
 def can_attach(row: ProcRow, native: str | None) -> bool:
     """Attachability: same-user and (if a native path is offered) readability."""
     try:
-        if (row.user or "") != current_user():
+        if (row.user or "").casefold() != current_user().casefold():
             return False
     except Exception:
         return False

@@ -11,18 +11,35 @@
 统一错误序列化（含不透明 request_id）。业务逻辑全部在
 ``hub.application.session_service``；本模块经由
 ``current_app.extensions["fleet"]["services"]["sessions"]`` 取得服务，不在
-模块级做任何 credential / 路径查找。原始 transcript 永不进入任何响应体：
-仅返回经过共享 schema 白名单的 bounded DTO。
+模块级做任何 credential / 路径查找。Operator 可读取完整 source_record；
+事件仍经过共享 schema 校验，以有界分片和分页传输。
 """
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 
 from hub.application.session_service import SessionService, SessionServiceError
-from hub.auth import require_ingest_token, require_operator
+from hub.application.session_search_service import SessionSearchServiceError
+from hub.auth import require_ingest_token, require_operator, require_runner
 from hub.http.errors import ApplicationError, error_response, get_request_id
 
 bp = Blueprint("sessions", __name__)
 
 _MAX_QUERY_LIMIT = 1000
+
+
+@bp.route("/api/session-search")
+@require_operator
+def api_session_search():
+    service = current_app.extensions.get("fleet", {}).get("services", {}).get("session_search")
+    if service is None:
+        return error_response(ApplicationError("search_disabled", "会话搜索尚未启用", 503))
+    allowed = {"q", "machine", "project", "agent", "from", "to", "limit", "after"}
+    if any(key not in allowed or len(request.args.getlist(key)) != 1 for key in request.args):
+        return error_response(ApplicationError("invalid_filter", "搜索参数不合法", 400))
+    filters = {key: value for key, value in request.args.items() if key != "q" and value != ""}
+    try:
+        return jsonify(service.search(request.args.get("q", ""), **filters))
+    except SessionSearchServiceError as exc:
+        return error_response(ApplicationError(exc.code, "会话搜索请求未完成", exc.status))
 
 
 def _sessions() -> SessionService:
@@ -48,6 +65,19 @@ def _query_limit(default: int = 100) -> int:
     return max(1, min(limit, _MAX_QUERY_LIMIT))
 
 
+def _query_after_sequence() -> int:
+    try:
+        return max(0, min(int(request.args.get("after_sequence", 0)), 2**63 - 1))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _query_bool(name: str) -> bool:
+    return str(request.args.get(name, "")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 @bp.route("/api/session-events", methods=["POST"])
 @require_ingest_token
 def api_session_events():
@@ -69,13 +99,32 @@ def api_session_events():
     return jsonify(result)
 
 
+@bp.route("/api/runner-session-events", methods=["POST"])
+@require_runner
+def api_runner_session_events():
+    # A runner can publish only its own machine-scoped stream. No extra
+    # ingest credential is needed for the normal task execution path.
+    import hashlib
+    prefix = "runner_" + hashlib.sha256(g.runner_machine.encode()).hexdigest()[:16] + "_"
+    data = request.get_json(silent=True)
+    if not isinstance(data, list):
+        return error_response(ApplicationError("invalid_json", "请求体必须是事件列表", 400))
+    if any(not isinstance(e, dict) or e.get("machine_id") != g.runner_machine
+           or not str(e.get("session_id", "")).startswith(prefix) for e in data):
+        return error_response(ApplicationError("machine_mismatch", "会话不属于当前 runner", 403))
+    try:
+        return jsonify(_sessions().ingest_events(data))
+    except SessionServiceError as exc:
+        return _session_error(exc)
+
+
 @bp.route("/api/sessions")
 @require_operator
 def api_sessions():
     try:
         result = _sessions().list_sessions(
             machine=request.args.get("machine") or None,
-            limit=_query_limit())
+            limit=_query_limit(), active=_query_bool("active"))
     except SessionServiceError as exc:
         return _session_error(exc)
     return jsonify(result)
@@ -91,12 +140,32 @@ def api_session_detail(session_id):
     return jsonify(result)
 
 
+@bp.route("/api/sessions/<session_id>/messages", methods=["POST"])
+@require_operator
+def api_session_message(session_id):
+    from hub.application.supervisor_service import SupervisorServiceError
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return error_response(ApplicationError("invalid_message", "请求必须为对象", 400))
+    if "request_id" not in data and (set(data) != {"text"} or not isinstance(data.get("text"), str)):
+        return error_response(ApplicationError("invalid_message", "text 必须是字符串", 400))
+    try:
+        if "request_id" in data:
+            return jsonify(_sessions().answer_interaction(session_id, data)), 202
+        return jsonify(_sessions().send_message(session_id, data["text"])), 202
+    except SessionServiceError as exc:
+        return _session_error(exc)
+    except SupervisorServiceError as exc:
+        return error_response(ApplicationError(exc.code, exc.detail, exc.status))
+
+
 @bp.route("/api/sessions/<session_id>/events")
 @require_operator
 def api_session_events_query(session_id):
     try:
         result = _sessions().session_events(
-            session_id, limit=_query_limit())
+            session_id, limit=_query_limit(),
+            after_sequence=_query_after_sequence())
     except SessionServiceError as exc:
         return _session_error(exc)
     return jsonify(result)
@@ -120,3 +189,28 @@ __all__ = [
     "api_sessions",
     "bp",
 ]
+
+
+def _handoffs():
+    service = current_app.extensions.get("fleet", {}).get("services", {}).get("handoffs")
+    if service is None:
+        raise ApplicationError("handoff_unavailable", "接力服务不可用", 503)
+    return service
+
+
+@bp.route("/api/sessions/<session_id>/handoff", methods=["GET"])
+@require_operator
+def api_handoff_preview(session_id):
+    try:
+        return jsonify(_handoffs().preview(session_id))
+    except ApplicationError as exc:
+        return error_response(exc)
+
+
+@bp.route("/api/sessions/<session_id>/handoff", methods=["POST"])
+@require_operator
+def api_handoff_create(session_id):
+    try:
+        return jsonify(_handoffs().create(session_id, request.get_json(silent=True), g.operator)), 202
+    except ApplicationError as exc:
+        return error_response(exc)

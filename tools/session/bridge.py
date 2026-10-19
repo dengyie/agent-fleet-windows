@@ -15,8 +15,9 @@ Design rules enforced here (see the Task 7 brief):
 - Managed/unmanaged semantics are authoritative: an unmanaged session reports
   ``managed=False``, ``capture_quality='best_effort'``,
   ``control_capability='unavailable'`` and may only ever capture best-effort.
-- Redaction (:mod:`tools.session.redact`) runs BEFORE the spool append.  The
-  spool is encrypted, append-only, quota-bounded (Task 4).
+- Normalized previews are redacted before append. Opted-in source_record
+  archives preserve all observable field values. The spool is encrypted,
+  append-only and quota-bounded.
 - Uploads go through the injected :class:`SessionUploader` / ``post_json``
   callable and honor the Task 6 response contract
   (``accepted_through`` / ``next_cursor`` / bounded ``rejected``).  The bridge
@@ -40,6 +41,9 @@ from typing import Any, Mapping
 
 import session_schema
 from session_schema import (
+    AGENT_STATE_CONFIDENCES,
+    AGENT_STATE_SOURCES,
+    AGENT_STATES,
     EVENT_KINDS,
     SCHEMA_VERSION,
     normalize_managed,
@@ -130,6 +134,24 @@ def _shape_native_row(raw: Mapping) -> list[tuple[str, Mapping]]:
     is now captured rather than only the first tool block).
     """
     rtype = str(raw.get("type") or "")
+    if rtype in ("item.started", "item.updated", "item.completed"):
+        item = raw.get("item")
+        if not isinstance(item, Mapping):
+            return []
+        itype = item.get("type")
+        completed = rtype == "item.completed"
+        if itype == "agent_message":
+            return [("assistant_message", {"text": item.get("text", ""),
+                                            "is_complete": completed})] if completed else []
+        if itype in ("command_execution", "mcp_tool_call", "file_change", "web_search"):
+            return [("tool_result" if completed else "tool_call", {
+                "tool_name": str(item.get("tool") or itype),
+                "call_id": str(item.get("id") or ""),
+                "arguments": _bounded_json(item.get("command", item.get("arguments", item.get("changes", item.get("query"))))),
+                "result": _bounded_json(item.get("aggregated_output", item.get("result", item.get("error")))),
+                "status": str(item.get("status") or ("completed" if completed else "running")),
+            })]
+        return []
     if rtype in ("event_msg", "response_item"):
         # codex rollout rows (type/payload wrapper) — see _shape_codex_row.
         return _shape_codex_row(raw)
@@ -297,6 +319,17 @@ def _shape_codex_row(raw: Mapping) -> list[tuple[str, Mapping]]:
         return []
     ptype = str(payload.get("type") or "")
     if rtype == "event_msg":
+        if ptype == "item_completed":
+            item = payload.get("item")
+            if isinstance(item, Mapping) and item.get("type") in ("UserMessage", "AgentMessage"):
+                blocks = item.get("content") or []
+                text = "\n".join(block["text"] for block in blocks
+                                 if isinstance(block, Mapping)
+                                 and block.get("type") in ("text", "Text")
+                                 and isinstance(block.get("text"), str))
+                return [("user_message" if item["type"] == "UserMessage" else "assistant_message",
+                         {"text": text, "is_complete": True})]
+            return []
         if ptype == "user_message":
             text = payload.get("message")
             if isinstance(text, str) and text:
@@ -567,6 +600,7 @@ class SessionBridge:
             config.update(dict(session_config))
         config.update(kwargs)
 
+        self._preserve_source = bool(config.get("preserve_source", False))
         self._manifest = dict(manifest or {})
         self._session_id = _required_opaque(config.get("session_id"),
                                             "session_id")
@@ -633,6 +667,7 @@ class SessionBridge:
         self._redactor = Redactor()
         self._hook_adapter = None
         self._pty_adapter = None
+        self._checkpoint_path = config.get("checkpoint_path")
         self._tailer = None
         self._last_error: str | None = None
         self._last_reject: str | None = None
@@ -657,6 +692,8 @@ class SessionBridge:
         start = self._build("session_start", payload={
             "agent_family": self._agent_family,
             "adapter": self.source or "metadata",
+            "interactive_questions": self._manifest.get("interactive_questions") is True
+                and self.source in ("hooks", "structured_stream", "native_transcript"),
         })
         self._emit_direct(start)
         self._started = True
@@ -721,8 +758,11 @@ class SessionBridge:
             path = self._native_path
         if path is None:
             raise ValueError("native path not configured")
-        if self._tailer is None or checkpoint_path is not None:
-            self._tailer = _tailer(path, checkpoint_path=checkpoint_path)
+        if checkpoint_path is not None:
+            self._checkpoint_path = checkpoint_path
+        if self._tailer is None:
+            options = {"max_line_bytes": 16 << 20} if self._preserve_source else {}
+            self._tailer = _tailer(path, checkpoint_path=self._checkpoint_path, **options)
         count = 0
         try:
             for obj in self._tailer.read():
@@ -735,8 +775,8 @@ class SessionBridge:
             self._emit_disconnect_gap("native_transcript", "source_disconnected")
         elif self._tailer.last_error:
             self._emit_disconnect_gap("native_transcript", "source_unavailable")
-        if checkpoint_path is not None and self._tailer is not None:
-            self._tailer.checkpoint_to(checkpoint_path)
+        if self._checkpoint_path is not None and self._tailer is not None:
+            self._tailer.checkpoint_to(self._checkpoint_path)
         return count
 
     def ingest_one(self, raw, *, source: str | None = None) -> bool:
@@ -822,6 +862,10 @@ class SessionBridge:
         return self._handle_raw("structured_stream", raw)
 
     def _handle_raw(self, source: str, raw) -> bool:
+        if source not in self.sources:
+            return False
+        if self._preserve_source:
+            self.record_source(raw)
         if source == "structured_stream":
             return self._handle_structured(raw)
         if source == "native_transcript":
@@ -832,13 +876,47 @@ class SessionBridge:
             return self._handle_pty(raw)
         return False
 
+    def record_source(self, raw) -> None:
+        """Retain observable source records, chunking instead of truncating.
+
+        4000 codepoints fit the wire cap even for escaped non-BMP Unicode.
+        Consecutive chunks end with is_complete=true and retain source order.
+        """
+        text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+        parts = [text[i:i + 4000] for i in range(0, len(text), 4000)] or [""]
+        for index, part in enumerate(parts):
+            event = self._build("source_record", payload={
+                "text": part, "is_complete": index == len(parts) - 1})
+            if not self._emit_event(event):
+                raise RuntimeError("source_record_not_persisted")
+
     def _handle_structured(self, raw) -> bool:
-        return self._emit_all(self._normalize(raw))
+        events = self._normalize(raw)
+        state = self._state_event_from_raw("structured_stream", raw)
+        if isinstance(events, dict):
+            events = [events]
+        else:
+            events = list(events or [])
+        if state is not None:
+            events.append(state)
+        elif self.managed:
+            events.extend(self._states_from_events("structured_stream", events))
+        return self._emit_all(events, source="structured_stream")
 
     def _handle_native(self, raw) -> bool:
-        return self._emit_all(self._normalize(raw))
+        events = self._normalize(raw)
+        state = self._state_event_from_raw("native_transcript", raw)
+        if isinstance(events, dict):
+            events = [events]
+        else:
+            events = list(events or [])
+        if state is not None:
+            events.append(state)
+        elif self.managed:
+            events.extend(self._states_from_events("native_transcript", events))
+        return self._emit_all(events, source="native_transcript")
 
-    def _emit_all(self, events) -> bool:
+    def _emit_all(self, events, source: str | None = None) -> bool:
         """Emit every shaped event in order; True if ANY was accepted.
 
         ``events`` is a list (multi-event shaping) or a single dict (full-
@@ -848,18 +926,67 @@ class SessionBridge:
             events = [events]
         accepted = False
         for event in (events or []):
+            if source and event:
+                event = dict(event, source=source)
             if self._emit_event(event):
                 accepted = True
         return accepted
+
+    def _states_from_events(self, source: str, events: list[dict]) -> list[dict]:
+        """Known structural records, never text heuristics, describe active work."""
+        for event in reversed(events):
+            kind = event.get("kind")
+            mapping = {"session_start": ("running", "session_started"),
+                "user_message": ("running", "user_prompt_submitted"),
+                "tool_call": ("running", "tool_started"), "tool_result": ("running", "tool_finished"),
+                "session_close": ("completed", "session_ended")}
+            if kind not in mapping:
+                continue
+            state, reason = mapping[kind]
+            return [self._build("agent_state_changed", payload={"state": state,
+                "source": source, "confidence": "medium", "reason": reason})]
+        return []
 
     def _handle_hook(self, raw) -> bool:
         if self._hook_adapter is None:
             return False
         try:
             event = self._hook_adapter.normalize(raw)
+            state = self._hook_adapter.state_event(raw)
         except Exception:
             return False
-        return self._emit_event(event)
+        accepted = self._emit_event(event)
+        if state is not None:
+            accepted = self._emit_event(state) or accepted
+        question = self._hook_adapter.interaction_event(raw)
+        if question is not None:
+            accepted = self._emit_event(question) or accepted
+            waiting = self._hook_adapter.state_event({"type": "AskUserQuestion",
+                "event_id": question["event_id"]})
+            self._emit_event(waiting)
+        return accepted
+
+    def _state_event_from_raw(self, source: str, raw: Mapping) -> dict | None:
+        """Build a lifecycle event only from explicit structured state data."""
+        if not isinstance(raw, Mapping):
+            return None
+        value = raw.get("agent_state", raw.get("state"))
+        if value not in AGENT_STATES:
+            return None
+        confidence = raw.get("state_confidence", "medium")
+        if confidence not in AGENT_STATE_CONFIDENCES:
+            confidence = "medium"
+        event = self._build("agent_state_changed", payload={
+            "state": value,
+            "source": source,
+            "confidence": confidence,
+            "reason": "explicit_state",
+        })
+        event["source"] = source
+        try:
+            return validate_event(event)
+        except (ValueError, TypeError):
+            return None
 
     def _handle_pty(self, raw) -> bool:
         if self._pty_adapter is None:
@@ -979,6 +1106,21 @@ class SessionBridge:
         """
         if event is None:
             return None
+        if event.get("kind") == "agent_state_changed":
+            source = event.get("source", self.source)
+            source = "hook" if source == "hooks" else source
+            if source not in AGENT_STATE_SOURCES:
+                return None
+            payload = dict(event["payload"], source=source)
+            if not self.managed:
+                payload.update(state="unknown", confidence="low", reason="unmanaged_source")
+            if source == "pty":
+                payload.update(state="unknown", confidence="low", reason="unstructured_source")
+            event = dict(event, payload=payload)
+        if event.get("kind") in ("interaction_request", "interaction_response"):
+            if (self._manifest.get("interactive_questions") is not True
+                    or event.get("source") not in ("hook", "hooks", "structured_stream", "native_transcript")):
+                return None
         if self.managed:
             return event
         kind = event.get("kind")
@@ -1002,6 +1144,11 @@ class SessionBridge:
         break is not a quality change.  The source name never leaks raw text;
         the reason stays a bounded token.
         """
+        state_source = "hook" if source == "hooks" else source
+        if state_source in AGENT_STATE_SOURCES:
+            self._emit_event(self._build("agent_state_changed", payload={
+                "state": "unknown", "source": state_source,
+                "confidence": "low", "reason": "source_disconnected"}))
         current = self.capture_quality or "structured"
         if current not in ("exact", "structured"):
             return
@@ -1054,7 +1201,9 @@ class SessionBridge:
             # control event); do not redact or persist a rejected event.
             return False
         # (1) redact
-        redacted, _ = self._redactor.redact_event(event)
+        # Source records are the operator's complete conversation archive.
+        # Unlike the normalized preview, do not rewrite paths/values here.
+        redacted = event if event["kind"] == "source_record" else self._redactor.redact_event(event)[0]
         try:
             result = self._spool.append(redacted)
         except (ValueError, TypeError, SpoolError) as exc:
@@ -1064,6 +1213,8 @@ class SessionBridge:
             return False
         if result.capture_blocked:
             self._emit_downgrade(event, "spool_quota")
+        if event["kind"] == "source_record":
+            return result.accepted
         return result.accepted or result.gap_sequence is not None
 
     def _emit_direct(self, event: dict) -> None:

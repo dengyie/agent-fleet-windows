@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from tools import local_process
+
 MAX_LOG_TAIL = 10240
 MAX_LINE = 500
 
@@ -44,6 +46,7 @@ class BaseAdapter:
         tail_len = [0]
 
         def feed(line):
+            original = line
             line = line[:MAX_LINE]
             tail.append(line)
             tail_len[0] += len(line) + 1
@@ -51,12 +54,12 @@ class BaseAdapter:
                 tail_len[0] -= len(tail.pop(0)) + 1
             if on_line:
                 try:
-                    on_line(line)
+                    on_line(original)
                 except Exception:
                     pass
 
         try:
-            proc = subprocess.Popen(
+            proc = local_process.popen(
                 argv, cwd=str(workdir),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, errors="replace",

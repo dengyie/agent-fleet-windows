@@ -109,11 +109,23 @@ def test_zcode_script_cli_classified_via_second_argv_token():
         "/usr/bin/node",
         'node "F:/programe/ZCode/resources/glm/zcode.cjs" -p hi',
     ) == "zcode"
-    # 反斜杠分隔符同样命中（跨平台 basename 语义）
+    # 引号内含真实空格（"C:\Program Files\..."）：tokenize 必须尊重引号内
+    # 空白，不得在第一个空格处截断
     assert discovery.classify_family(
         "/usr/bin/node",
-        'node "F:\programe\ZCode\resources\glm\zcode.cjs" -p hi',
+        r'node "C:\Program Files\ZCode\resources\glm\zcode.cjs" -p hi',
     ) == "zcode"
+    # 反斜杠分隔符同样命中（跨平台 basename 语义）；raw string 避免无效转义
+    assert discovery.classify_family(
+        "/usr/bin/node",
+        r'node "F:\programe\ZCode\resources\glm\zcode.cjs" -p hi',
+    ) == "zcode"
+    # 未闭合引号宽容退化：不崩溃；退化方向是不识别而非误分类（尾部参数
+    # 会留在 token 里导致 basename 不精确命中，None 是安全答案）
+    assert discovery.classify_family(
+        "/usr/bin/node",
+        'node "/opt/cli/zcode.cjs -p hi',
+    ) is None
     # node 跑非家族脚本绝不误分类
     assert discovery.classify_family(
         "/usr/bin/node", "node /opt/server/app.cjs serve") is None
@@ -127,6 +139,48 @@ def test_pi_basename_never_matches_as_substring():
     assert discovery.classify_family("/usr/bin/pip", "pip install x") is None
     assert discovery.classify_family("/usr/bin/pipenv", "pipenv run") is None
     assert discovery.classify_family("/usr/bin/pil", "pil") is None
+
+
+def test_windows_process_rows_parse_agent_processes_after_narrow_owner_filter(monkeypatch):
+    captured = {}
+    payload = [
+        {
+            "User": "mango", "ProcessId": 42, "ParentProcessId": 1,
+            "ExecutablePath": r"C:\Users\mango\AppData\Local\OpenAI\Codex\codex.exe",
+            "CommandLine": r"C:\Users\mango\AppData\Local\OpenAI\Codex\codex.exe app-server",
+            "Name": "codex.exe", "CreationUtc": "2026-10-19T01:02:03Z",
+        },
+        {
+            "User": "mango", "ProcessId": 43, "ParentProcessId": 2,
+            "ExecutablePath": r"F:\programe\ZCode\ZCode.exe",
+            "CommandLine": r"F:\programe\ZCode\ZCode.exe F:\programe\ZCode\resources\glm\zcode.cjs app-server --stdio",
+            "Name": "ZCode.exe", "CreationUtc": "2026-10-19T01:02:04Z",
+        },
+    ]
+
+    def run_script(script):
+        captured["script"] = script
+        return payload
+
+    monkeypatch.setattr(discovery.os, "name", "nt")
+    monkeypatch.setattr(discovery, "_run_powershell_json", run_script)
+    rows = discovery.enumerate_process_rows()
+
+    assert [(row.pid, row.user, row.comm) for row in rows] == [
+        (42, "mango", "codex.exe"), (43, "mango", "ZCode.exe")]
+    script = captured["script"]
+    assert script.index("Where-Object") < script.index("Invoke-CimMethod")
+    assert "GetOwner" in script
+    assert "AGENT_FLEET_LOCAL_USER" not in script
+    assert "zcode\\.cjs" in script
+    assert "($interpreter -and $script_cli)" in script
+
+
+def test_windows_process_query_timeout_is_reported_as_discovery_error(monkeypatch):
+    monkeypatch.setattr(discovery.os, "name", "nt")
+    monkeypatch.setattr(discovery, "_run_powershell_json", lambda script: None)
+    assert discovery.discover_instances() == []
+    assert discovery.last_discovery_error == discovery.DISCOVERY_ERROR_CODE
 
 
 def test_can_attach_requires_same_user_and_readable_native(monkeypatch):
