@@ -97,7 +97,7 @@ python3 tools/agent-self-report.py \
 > */2 * * * * python3 /path/to/agent-fleet/tools/agent-self-report.py --endpoint https://hub.example.com --name worker-node-1 --token "$AGENT_FLEET_INGEST_TOKEN" >/dev/null 2>&1
 > ```
 
-> **Windows 节点发版来源（重要）**：本节点的权威版本化源码是私有仓库 `dengyie/agent-fleet-windows`，发版必须从该仓库执行 `deploy/package-release.sh`（`git archive HEAD`）。它与公开仓库 `dengyie/agent-fleet` 历史**无关**，后者不含 Windows 探针枚举（`tools/probe/discovery.py` 的 PowerShell 路径）；误用后者发版会移除本节点的 Windows 采集。详见 [Windows 节点源码与发版来源](docs/windows-node-source.md)。
+> **发版来源（重要）**：本仓库（本地 `E:\code\agent-fleet`，即 `dengyie/agent-fleet`）是唯一权威源码，已包含完整节点代码与完整历史（含 `tools/probe/discovery.py` 的 Windows 探针枚举）。发版必须在此执行 `deploy/package-release.sh`（`git archive HEAD`）；只有已提交的内容会进入发布包，live 目录的手改会在下次发版时丢失。详见 [Windows 节点源码与发版来源](docs/windows-node-source.md)。
 
 ---
 
