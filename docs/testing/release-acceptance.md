@@ -47,11 +47,7 @@ skipped. The report contains model/run identifiers and statuses but no
 credentials, cookies, file listing or reply text; restrict access to the
 workflow artifact accordingly.
 
-This workflow does not automate MAIL-LIVE, NODE-LIVE or the isolated rollback
-portion of DEPLOY-LIVE. Those still require an explicitly designated mailbox
-with inbox access, a configured test Node, and a separate staging target. The
-existing `CI` workflow continues to run tests on pull requests and to deploy
-only from `main`; a deployment success is not substituted for those checks.
+此 workflow 不自动化 MAIL-LIVE、NODE-LIVE 或 DEPLOY-LIVE。那些仍要求明确指定的邮箱、测试 Node 和独立的发布/回滚步骤。现有 `CI` workflow 在 pull request 上运行测试，并在 main 上生成同 run 的发布 artifact，但不执行远程部署；发布与 live 切换按[Windows 节点源码与发版来源](../windows-node-source.md)执行，CI 成功不能替代这些验收。
 
 只验证明确指定的模型时重复 `--model PROFILE_ID`，不要同时传 `--all-models`。`--timeout` 默认每模型 150 秒，范围 1–600 秒；同一截止时间覆盖创建对话、提交、状态轮询、事件读取和对话恢复。DNS 等待、逐地址 TCP 连接、TLS 握手、响应头和响应体读取均使用剩余预算，缓慢传输不能重置预算；截止后返回成功终态仍视为未确认。与 provider 共用有界 HTTP 截止机制；同一 host/port 的阻塞 DNS 查询共享一个后台解析线程，全进程最多 8 个查询，等待容量也计入预算。超时后的 DNS 结果不能建立连接或发送请求；连续验收失败不会不断新增线程。验收客户端仍直连配置的 origin，不使用环境代理。登录、目录预检和最终退出校验独立于每模型预算。选项全部显式提供；该工具不从源码读取固定管理员密码，不推断生产域名，也不配置模型、用户或工作区。
 
