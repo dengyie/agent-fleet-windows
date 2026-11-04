@@ -421,20 +421,16 @@ def test_public_probe_has_one_deadline_and_rejects_late_success(tmp_path, monkey
     assert calls and len(calls) <= 2
 
 
-def test_ci_deploy_is_main_only_after_tests_and_same_run_packaging():
+def test_ci_packages_main_without_a_remote_deployment_job():
     workflow = yaml.safe_load((Path(__file__).resolve().parents[1] / '.github/workflows/ci.yml').read_text())
-    job = workflow['jobs']['deploy']
-    assert set(job['needs']) == {'test', 'package'}
-    assert "github.ref == 'refs/heads/main'" in job['if']
-    assert "github.event_name == 'push'" in job['if']
-    assert job['environment'] == 'production'
-    assert job['concurrency']['cancel-in-progress'] is False
-    downloads = [step['with'] for step in job['steps'] if step.get('uses', '').startswith('actions/download-artifact@')]
-    assert {item['name'] for item in downloads} == {'agent-fleet-release', 'agent-fleet-frontend'}
-    assert all('run-id' not in item and 'repository' not in item for item in downloads)
-    steps = '\n'.join(step.get('run', '') for step in job['steps'])
-    assert 'StrictHostKeyChecking=yes' in steps
-    assert 'git/ref/heads/main' in steps
-    assert 'systemctl' not in steps and 'docker ' not in steps  # Receiver owns privileged operations.
-    for name in ('test', 'package'):
-        assert 'secrets.' not in json.dumps(workflow['jobs'][name])
+    assert set(workflow['jobs']) == {'test', 'package'}
+    assert 'deploy' not in workflow['jobs']
+    package = workflow['jobs']['package']
+    assert package['needs'] == 'test'
+    assert "github.ref == 'refs/heads/main'" in package['if']
+    uploads = [step['with'] for step in package['steps'] if step.get('uses', '').startswith('actions/upload-artifact@')]
+    assert {item['name'] for item in uploads} == {'agent-fleet-release', 'agent-fleet-frontend'}
+    serialized = json.dumps(workflow)
+    assert 'environment:' not in serialized
+    assert 'secrets.' not in serialized
+    assert 'SSH_HOST' not in serialized
