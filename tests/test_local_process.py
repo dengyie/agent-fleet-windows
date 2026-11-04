@@ -12,8 +12,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from tools import local_process
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -116,7 +114,6 @@ def test_binary_mode_never_forces_a_text_decoder(monkeypatch):
     assert "errors" not in captured
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only shim shadowing")
 def test_resolve_bash_never_returns_the_wsl_launcher():
     resolved = local_process.resolve_bash()
     if resolved is not None:
