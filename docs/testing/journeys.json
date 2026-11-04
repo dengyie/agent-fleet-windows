@@ -596,7 +596,7 @@
         "tests/test_auto_deploy.py::test_nginx_cutover_and_restore_keep_original_account_proxy_config",
         "tests/test_auto_deploy.py::test_public_probe_waits_for_nginx_reload_to_take_effect",
         "tests/test_auto_deploy.py::test_public_probe_has_one_deadline_and_rejects_late_success",
-        "tests/test_auto_deploy.py::test_ci_deploy_is_main_only_after_tests_and_same_run_packaging",
+        "tests/test_auto_deploy.py::test_ci_packages_main_without_a_remote_deployment_job",
         "tests/test_release_layout.py::DeploymentSafetyTests::test_package_refuses_existing_output_with_unlisted_files",
         "tests/test_release_layout.py::RuntimeStoreHygieneTests::test_parallel_full_release_archives_have_isolated_staging",
         "tests/test_http_transport.py::test_tls_verification_and_shutdown",
