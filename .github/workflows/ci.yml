@@ -60,9 +60,12 @@ jobs:
           "$RUNNER_TEMP/fleet-browser/node_modules/.bin/playwright" install chromium
       - name: Run test suite
         shell: bash
+        # deploy/* 依赖 Unix-only 的 fcntl（部署只在 Linux 容器上发生），
+        # Windows 观测 job 跳过 deploy 相关模块以收集其余套件的兼容性信号。
         run: |
           FLEET_PLAYWRIGHT_MODULE="$RUNNER_TEMP/fleet-browser/node_modules/playwright" \
           FLEET_BROWSER_CHANNEL=chromium PYTHONPATH=. python -m pytest tests -q \
+            --ignore=tests/test_auto_deploy.py \
             --junitxml="$RUNNER_TEMP/fleet-test-evidence/results.xml"
 
   test:
