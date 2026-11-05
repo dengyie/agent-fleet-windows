@@ -14,7 +14,7 @@ def release_target(tmp_path, monkeypatch):
     with StrictProvider() as provider:
         with FullFlowHub(tmp_path, provider) as hub:
             credentials = tmp_path / 'credentials.json'
-            credentials.write_text(json.dumps({'username': 'mango', 'password': PASSWORD}))
+            credentials.write_text(json.dumps({'username': 'demo-operator', 'password': PASSWORD}))
             credentials.chmod(0o600)
             args = ['--endpoint', hub.origin, '--credentials-file', str(credentials), '--workspace', 'home', '--timeout', '5']
             yield hub, credentials, args
@@ -98,7 +98,7 @@ def test_acceptance_denies_tools_before_side_effects(release_target, capsys, mon
 
 def test_release_cli_invalid_credentials_cannot_create_runs(release_target, capsys):
     hub, credentials, args = release_target
-    credentials.write_text(json.dumps({'username': 'mango', 'password': 'wrong-password'}))
+    credentials.write_text(json.dumps({'username': 'demo-operator', 'password': 'wrong-password'}))
     assert main(args + ['--model', 'read-only']) == 1
     assert json.loads(capsys.readouterr().out)['http_status'] == 401
     assert hub.provider.requests == []

@@ -19,7 +19,7 @@ from tools.probe import discovery
 def test_discover_instances_returns_identity(monkeypatch):
     monkeypatch.setattr(discovery, "enumerate_process_rows", lambda: [
         discovery.ProcRow(
-            user="mango", pid=321, pgid=320,
+            user="demo", pid=321, pgid=320,
             exe_path="/usr/local/bin/codex", cmdline="codex --resume abc",
             started_at="2026-08-30T00:00:01Z",
         )
@@ -35,7 +35,7 @@ def test_discover_instances_returns_identity(monkeypatch):
 def test_bad_row_does_not_poison_other_rows(monkeypatch):
     monkeypatch.setattr(discovery, "enumerate_process_rows", lambda: [
         object(), discovery.ProcRow(
-            user="mango", pid=9, pgid=9, exe_path="/bin/hermes",
+            user="demo", pid=9, pgid=9, exe_path="/bin/hermes",
             cmdline="hermes", started_at="2026-08-30T00:00:02Z")])
     monkeypatch.setattr(discovery, "native_path_for", lambda row: None)
     monkeypatch.setattr(discovery, "can_attach", lambda row, native: True)
@@ -145,13 +145,13 @@ def test_windows_process_rows_parse_agent_processes_after_narrow_owner_filter(mo
     captured = {}
     payload = [
         {
-            "User": "mango", "ProcessId": 42, "ParentProcessId": 1,
-            "ExecutablePath": r"C:\Users\mango\AppData\Local\OpenAI\Codex\codex.exe",
-            "CommandLine": r"C:\Users\mango\AppData\Local\OpenAI\Codex\codex.exe app-server",
+            "User": "demo", "ProcessId": 42, "ParentProcessId": 1,
+            "ExecutablePath": r"C:\Users\demo\AppData\Local\OpenAI\Codex\codex.exe",
+            "CommandLine": r"C:\Users\demo\AppData\Local\OpenAI\Codex\codex.exe app-server",
             "Name": "codex.exe", "CreationUtc": "2026-10-19T01:02:03Z",
         },
         {
-            "User": "mango", "ProcessId": 43, "ParentProcessId": 2,
+            "User": "demo", "ProcessId": 43, "ParentProcessId": 2,
             "ExecutablePath": r"F:\programe\ZCode\ZCode.exe",
             "CommandLine": r"F:\programe\ZCode\ZCode.exe F:\programe\ZCode\resources\glm\zcode.cjs app-server --stdio",
             "Name": "ZCode.exe", "CreationUtc": "2026-10-19T01:02:04Z",
@@ -167,7 +167,7 @@ def test_windows_process_rows_parse_agent_processes_after_narrow_owner_filter(mo
     rows = discovery.enumerate_process_rows()
 
     assert [(row.pid, row.user, row.comm) for row in rows] == [
-        (42, "mango", "codex.exe"), (43, "mango", "ZCode.exe")]
+        (42, "demo", "codex.exe"), (43, "demo", "ZCode.exe")]
     script = captured["script"]
     assert script.index("Where-Object") < script.index("Invoke-CimMethod")
     assert "GetOwner" in script
@@ -185,9 +185,9 @@ def test_windows_process_query_timeout_is_reported_as_discovery_error(monkeypatc
 
 def test_can_attach_requires_same_user_and_readable_native(monkeypatch):
     from tools.probe import discovery as d
-    monkeypatch.setattr(d, "current_user", lambda: "mango")
+    monkeypatch.setattr(d, "current_user", lambda: "demo")
     import os
-    row = d.ProcRow("mango", 1, 1, "/bin/codex", "codex", "2026-08-30T00:00:00Z")
+    row = d.ProcRow("demo", 1, 1, "/bin/codex", "codex", "2026-08-30T00:00:00Z")
     assert d.can_attach(row, None) is True
     assert d.can_attach(row, "") is True
     row_other = d.ProcRow("root", 1, 1, "/bin/codex", "codex", "2026-08-30T00:00:00Z")
@@ -200,7 +200,7 @@ def test_can_attach_requires_same_user_and_readable_native(monkeypatch):
 def test_cmdline_truncated_only_at_schema_boundary(monkeypatch):
     long_cmd = "codex" + " x" * 500
     monkeypatch.setattr(discovery, "enumerate_process_rows", lambda: [
-        discovery.ProcRow("mango", 5, 5, "/bin/codex", long_cmd,
+        discovery.ProcRow("demo", 5, 5, "/bin/codex", long_cmd,
                           "2026-08-30T00:00:00Z")])
     monkeypatch.setattr(discovery, "native_path_for", lambda row: None)
     monkeypatch.setattr(discovery, "can_attach", lambda row, native: True)

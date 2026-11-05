@@ -39,7 +39,7 @@ class Client:
         finally:
             c.close()
 
-    def login(self, email='mango', password=PASSWORD):
+    def login(self, email='demo-operator', password=PASSWORD):
         return self.request('/api/accounts/login', {'email': email, 'password': password})['user']
 
     def submit(self, prompt='full flow', *, conversation=None, token='flow-turn', model=None):
@@ -100,7 +100,7 @@ class FullFlowHub:
         accounts = self.app.extensions['accounts']
         accounts.clock = lambda: self.clock[0]
         if not accounts.users():
-            accounts.bootstrap_admin('admin@example.test', PASSWORD, login_name='mango')
+            accounts.bootstrap_admin('admin@example.test', PASSWORD, login_name='demo-operator')
         self.owner = next(u['id'] for u in accounts.users() if u['email'] == 'admin@example.test')
         self.workspace = self.provision(self.owner)
         if self.browser:

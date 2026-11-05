@@ -1,10 +1,10 @@
 # Windows 节点源码与发版来源
 
-本文件说明 Windows 舰队节点（本机 `DESKTOP-VST7EIE`，live 目录 `C:\Users\mango\agent-fleet`）的权威版本化源码，以及为什么发版必须从这里构建。
+本文件说明 Windows 舰队节点（下称「fleet-node」，live 目录形如 `C:\Users\<you>\agent-fleet`）的权威版本化源码，以及为什么发版必须从这里构建。
 
 ## 权威仓库
 
-- **`dengyie/agent-fleet-windows`（私有仓库）** 是本节点的权威版本化源码。live 目录无 `.git`，`agent-fleet-stage-*` 快照即本仓库的工作副本，发版产物由它构建。
+- **`dengyie/agent-fleet-windows`** 是本节点的权威版本化源码。live 目录无 `.git`，`agent-fleet-stage-*` 快照即本仓库的工作副本，发版产物由它构建。
 - 历史：`e3711cc`（Windows 节点部署快照）→ `17a1d4c`（根因修复：集中化 console 窗口 + 解码策略）→ `f0bc095`（记忆化 bash 解析）。
 
 ## 与 `dengyie/agent-fleet` 的关系

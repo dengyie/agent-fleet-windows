@@ -226,7 +226,7 @@ Guardian 重启旧 Web 服务时，原实现先读取并校验 `/proc/<pid>`，�
 
 ## 公开基线快照审查（未发布）
 
-为准备符合远端保护要求的审阅候选，在 Codex 隔离工作树 `/Users/mango/.codex/worktrees/public-snapshot-review/agent-fleet` 从 `origin/main` 建立预览；把本地 `main` 相对公开基线的 tracked diff 应用为一个提交 `03569ba61a25d124ac994ca7321ddc9afef542ac`，其唯一父提交为公开 `f6c35f9a5f8e5e6da9ad0abaf7c37ff257b6ea58`。该候选仅存在本地，没有推送。
+为准备符合远端保护要求的审阅候选，在 Codex 隔离工作树 `~/.codex/worktrees/public-snapshot-review/agent-fleet` 从 `origin/main` 建立预览；把本地 `main` 相对公开基线的 tracked diff 应用为一个提交 `03569ba61a25d124ac994ca7321ddc9afef542ac`，其唯一父提交为公开 `f6c35f9a5f8e5e6da9ad0abaf7c37ff257b6ea58`。该候选仅存在本地，没有推送。
 
 公开快照路径审查未发现 credentials/state/var/`.env`/hosts/private-key 路径；高熵凭据模式扫描命中 `tests/test_task_patch_bounds.py` 和 `tests/test_task_files.py` 中用于脱敏回归的相同合成 `ghp_...` 字符串。完整 Python 3.10 + Chrome 门禁为 **3080 passed、5 macOS Linux-only skips、156 subtests、29/29 journeys**，耗时 336.09 秒；唯一警告是既有 `tools/probe/discovery.py` docstring 的无效转义弃用警告。证据在 `/tmp/agent-fleet-public-snapshot-committed/`。本机候选的 release validator 返回 `junit_incomplete`，原因是 5 个 macOS 平台 skip；包归档包含 pidfd helper，解包 compileall 与使用临时测试 token 创建 Hub app 通过。
 

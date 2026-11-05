@@ -1,12 +1,12 @@
 # HK 备份恢复演练清单（只读核对 + 批准后才真切回）
 
 > 默认只核对 bak 存在与 tar 覆盖步骤。**禁止未批准在 LIVE bind-mount 上真切回。**
-> 2026-09-11 operator 书面批准：对 LIVE 做一次真切回（`bak-20260911-pre-da54e48` → 拨测 → 再切回 `da54e48`）。
+> 历史上 operator 曾书面批准对 LIVE 做真切回演练（`bak-<ts>-pre-<rev>` → 拨测 → 切回）；具体批准与 bak 记录见仓库外 / Obsidian 部署笔记。
 > 权威部署步骤仍是仓库外 / Obsidian 部署笔记 §0；本文不替代 §0。
 
 ## 已知演练源
 
-- 2026-09-09 bak：`agent-fleet.bak-20260909-pre-182e034`（files API overlay 前）
+- 演练用 bak：`agent-fleet.bak-<ts>-pre-<rev>`（历次记录见部署笔记）
 - LIVE 根：容器内 `${FLEET_HOME}/agent-fleet`（bind-mount 时 `FLEET_LIVE_MODE=overlay`，**禁止 `ln -sfn`**）
 - 任务库 / 审计：`state/fleet.db`（随 bak 走；无单独 TTL purge）
 

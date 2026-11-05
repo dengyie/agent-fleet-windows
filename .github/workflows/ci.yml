@@ -20,6 +20,50 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff==0.17.3
+      - name: Ruff fatal-error scan
+        # 只拦语法/未定义名/重复键等致命错误；风格类规则待补 ruff 配置后再放开。
+        run: ruff check --select E9,F63,F7,F82 .
+
+  # Windows 兼容性观测：本仓库是 Windows 节点的权威源码，但测试长期只在
+  # ubuntu 上执行。先以非阻塞方式收集 Windows 失败面，全绿后再转阻塞。
+  windows-test:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install browser test runner
+        run: |
+          npm install --prefix "$RUNNER_TEMP/fleet-browser" --no-audit --no-fund --package-lock=false playwright@1.63.0
+          "$RUNNER_TEMP/fleet-browser/node_modules/.bin/playwright" install chromium
+      - name: Run test suite
+        shell: bash
+        run: |
+          FLEET_PLAYWRIGHT_MODULE="$RUNNER_TEMP/fleet-browser/node_modules/playwright" \
+          FLEET_BROWSER_CHANNEL=chromium PYTHONPATH=. python -m pytest tests -q \
+            --junitxml="$RUNNER_TEMP/fleet-test-evidence/results.xml"
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15

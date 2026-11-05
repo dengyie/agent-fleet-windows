@@ -63,8 +63,8 @@
 
 ```bash
 # 克隆仓库并安装依赖
-git clone https://github.com/dengyie/agent-fleet.git
-cd agent-fleet
+git clone https://github.com/dengyie/agent-fleet-windows.git
+cd agent-fleet-windows
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
