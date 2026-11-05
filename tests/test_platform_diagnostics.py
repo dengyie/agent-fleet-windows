@@ -48,7 +48,7 @@ def test_diagnostics_are_bounded_owner_scoped_and_redacted(tmp_path):
     diagnostics = DiagnosticService(
         health, incidents,
         log_reader=lambda service, **kwargs: {
-            "text": "password=correct horse battery staple token=secret-value /Users/mango/private.txt",
+            "text": "password=correct horse battery staple token=secret-value /Users/demo/private.txt",
             "truncated": False, "observed_at": 99,
         },
     )
@@ -61,7 +61,7 @@ def test_diagnostics_are_bounded_owner_scoped_and_redacted(tmp_path):
     logs = diagnostics.read_logs("owner-a@example.test", "api", window_s=60, max_bytes=1024)
     assert "correct horse" not in logs["logs"]["text"]
     assert "secret-value" not in logs["logs"]["text"]
-    assert "Users/mango" not in logs["logs"]["text"]
+    assert "Users/demo" not in logs["logs"]["text"]
     with pytest.raises(ApplicationError) as too_wide:
         diagnostics.read_logs("owner-a@example.test", "api", window_s=999999)
     assert too_wide.value.code == "invalid_window_s"

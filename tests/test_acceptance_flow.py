@@ -19,7 +19,7 @@ def chain_target(tmp_path, monkeypatch, request):
         with FullFlowHub(tmp_path, provider, remote=request.param) as hub:
             with LoopbackNode(hub) if request.param else nullcontext() as node:
                 credentials = tmp_path / 'credentials.json'
-                credentials.write_text(json.dumps({'username': 'mango', 'password': PASSWORD}))
+                credentials.write_text(json.dumps({'username': 'demo-operator', 'password': PASSWORD}))
                 credentials.chmod(0o600)
                 args = ['--endpoint', hub.origin, '--credentials-file', str(credentials),
                         '--workspace', 'remote' if node else 'home',
@@ -205,7 +205,7 @@ def test_accepted_response_timeout_recovers_unique_run_by_token(idle_hub):
         return response
 
     client = AccountClient(hub.origin)
-    client.request('/api/accounts/login', {'email': 'mango', 'password': PASSWORD})
+    client.request('/api/accounts/login', {'email': 'demo-operator', 'password': PASSWORD})
     try:
         row = check_model(client, 'read-only', 'home', .5)
         assert accepted.is_set()
@@ -243,7 +243,7 @@ def test_legacy_hub_does_not_fallback_to_unrestricted_turn(idle_hub):
             return {'error': 'not_found'}, 404
 
     client = AccountClient(hub.origin)
-    client.request('/api/accounts/login', {'email': 'mango', 'password': PASSWORD})
+    client.request('/api/accounts/login', {'email': 'demo-operator', 'password': PASSWORD})
     row = check_model(client, 'read-only', 'home', 5)
     assert row['status'] == 'failed' and row['http_status'] == 404
     assert len(submissions) == 1 and submissions[0].endswith('/acceptance-turns')

@@ -244,7 +244,7 @@ class TestAgentFleetGuardian(unittest.IsolatedAsyncioTestCase):
         source = (
             Path(__file__).resolve().parents[1] / "hub" / "agent_fleet_guardian.py"
         ).read_text()
-        self.assertNotIn("/home/mango", source)
+        self.assertNotIn("/home/demo", source)
 
 
 class TestAgentFleetGuardianWatcher(unittest.IsolatedAsyncioTestCase):

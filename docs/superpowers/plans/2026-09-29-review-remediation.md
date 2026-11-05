@@ -29,7 +29,7 @@
 - [x] Model choice (`frontend/views/assistant.js`): send `overrides.model_profile_id`; show actual frozen Run selection. Regression: choose a non-default model, submit and verify the server snapshot and displayed result.
 - [x] Final verification: focused tests for each repair, full combined pytest suite, Python AST/JS/Bash syntax and `git diff --check`; record outcomes and local commits. Deployment validation remains separate.
 
-Test command: `PYTHONDONTWRITEBYTECODE=1 /Users/mango/.codex/worktrees/agent-fleet-platform-m1/agent-fleet/.venv/bin/python -m pytest -q -p no:cacheprovider`.
+Test command: `PYTHONDONTWRITEBYTECODE=1 ~/.codex/worktrees/agent-fleet-platform-m1/agent-fleet/.venv/bin/python -m pytest -q -p no:cacheprovider`.
 
 
 ## Related boundary corrections found during verification

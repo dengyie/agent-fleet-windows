@@ -84,7 +84,7 @@ Contract: finite safe JSON scalars, bounded UTF-8 strings including their JSON e
 - Full current checkout: **2663 passed, 2 skipped, 154 subtests passed**, 29/29 journeys, in 329.82 seconds. The two skips require Linux `/proc`; the existing `tools/probe/discovery.py` docstring warning is unrelated. External checks remain `not_run`.
 - Python 3.10 AST parse and compile checks passed for all five changed/new Python files; `git diff --check` passed.
 - Evidence: `/tmp/agent-fleet-completion-evidence/results.xml`, `/tmp/agent-fleet-completion-evidence/journeys.json`, and `/tmp/agent-fleet-completion-evidence/browser/`.
-- Command: `FLEET_PLAYWRIGHT_MODULE=/tmp/pr6-review-browser/node_modules/playwright FLEET_BROWSER_CHANNEL=chrome FLEET_SCREENSHOTS=/tmp/agent-fleet-completion-evidence/browser PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /Users/mango/project/codex/agent-fleet/.venv/bin/python -m pytest tests -q --tb=short -rs -p no:cacheprovider --require-journeys --journey-report=/tmp/agent-fleet-completion-evidence/journeys.json --junitxml=/tmp/agent-fleet-completion-evidence/results.xml`.
+- Command: `FLEET_PLAYWRIGHT_MODULE=/tmp/pr6-review-browser/node_modules/playwright FLEET_BROWSER_CHANNEL=chrome FLEET_SCREENSHOTS=/tmp/agent-fleet-completion-evidence/browser PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. <repo>/.venv/bin/python -m pytest tests -q --tb=short -rs -p no:cacheprovider --require-journeys --journey-report=/tmp/agent-fleet-completion-evidence/journeys.json --junitxml=/tmp/agent-fleet-completion-evidence/results.xml`.
 
 This verifies Tasks 1 and 2 only. The full requirement audit, real-browser/notification contracts and external acceptance remain open.
 
@@ -204,7 +204,7 @@ Files: `hub/infrastructure/execution_window_repository.py`, `hub/application/exe
 - [x] Reject out-of-range event cursors before SQL and distinguish omitted payload from an explicitly malformed false-valued payload.
 - [x] Re-run the failing cases and existing execution-window/frontend/conversation tests, then the committed journey and package gates (see checkpoints below).
 
-Run focused checks with `PYTHONPATH=. /Users/mango/project/codex/agent-fleet/.venv/bin/python -m pytest -q tests/test_platform_execution_windows.py tests/test_frontend_execution_window_contracts.py tests/test_platform_conversation.py`. Real browser, notification and external acceptance requirements remain open.
+Run focused checks with `PYTHONPATH=. <repo>/.venv/bin/python -m pytest -q tests/test_platform_execution_windows.py tests/test_frontend_execution_window_contracts.py tests/test_platform_conversation.py`. Real browser, notification and external acceptance requirements remain open.
 
 Fresh focused verification: **45 passed** in 1.19 seconds, including the same 17 previously failing cases and 3 added controls. All three changed Python files parse with Python 3.10 grammar and compile successfully; whitespace checks pass. WINDOW-01 now includes the six new parameterized test selectors. Full committed-revision verification remains pending.
 

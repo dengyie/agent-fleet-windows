@@ -423,7 +423,7 @@ def test_public_probe_has_one_deadline_and_rejects_late_success(tmp_path, monkey
 
 def test_ci_packages_main_without_a_remote_deployment_job():
     workflow = yaml.safe_load((Path(__file__).resolve().parents[1] / '.github/workflows/ci.yml').read_text())
-    assert set(workflow['jobs']) == {'test', 'package'}
+    assert set(workflow['jobs']) == {'test', 'package', 'lint', 'windows-test'}
     assert 'deploy' not in workflow['jobs']
     package = workflow['jobs']['package']
     assert package['needs'] == 'test'

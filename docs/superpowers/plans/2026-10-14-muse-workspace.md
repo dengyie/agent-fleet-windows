@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Work only in `/Users/mango/.codex/worktrees/muse-browser-bridge/agent-fleet` on `codex/muse-browser-bridge`.
+- Work only in `~/.codex/worktrees/muse-browser-bridge/agent-fleet` on `codex/muse-browser-bridge`.
 - Do not commit, deploy or alter primary checkout.
 - Login import accepts Muse Cookie JSON / Playwright storage state; never persist plaintext credentials, echo credentials or send cookies to VM hosts.
 - No browser dependency in runtime. Probe standard VM handshake; reject confidential VM challenges requiring additional keys rather than bypassing attestation.

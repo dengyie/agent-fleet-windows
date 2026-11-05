@@ -414,7 +414,7 @@ class AttachTests(unittest.TestCase):
 
         def fake_cwd(pid):
             self.assertEqual(int(pid), int(self.proc.pid))
-            return "/Users/mango"
+            return "/Users/demo"
 
         with mock.patch.object(
                 sup_mod, "_live_process_cwd", side_effect=fake_cwd):
@@ -424,22 +424,22 @@ class AttachTests(unittest.TestCase):
                 "adopted")
         entry = self.sup._entries[self.sid]
         handle = self.sup._handle_of(self.sid)
-        self.assertEqual(entry.cwd, "/Users/mango")
-        self.assertEqual(getattr(handle, "cwd", None), "/Users/mango")
+        self.assertEqual(entry.cwd, "/Users/demo")
+        self.assertEqual(getattr(handle, "cwd", None), "/Users/demo")
         self.assertIsInstance(entry.env, dict)
         self.assertTrue(entry.env)
         self.assertNotEqual(entry.cwd, "/tmp")
         public = json.dumps(self.sup.status(self.sid))
         raw = (self.dir / "sup" / f"{self.sid}.json").read_text()
-        self.assertNotIn("/Users/mango", public)
-        self.assertNotIn("/Users/mango", raw)
+        self.assertNotIn("/Users/demo", public)
+        self.assertNotIn("/Users/demo", raw)
 
     def test_pi_attached_native_resume_appends_via_session_file(self):
         native = self.dir / "2026-09-06T19-20-24-489Z_01a0782a-2aa9-75a7-a47b-4d3e0b7225a5.jsonl"
         native.write_text("{}")
         os.chmod(native, 0o600)
         with mock.patch.object(
-                sup_mod, "_live_process_cwd", return_value="/Users/mango"):
+                sup_mod, "_live_process_cwd", return_value="/Users/demo"):
             self.assertEqual(
                 self._attach(native_file_path=str(native),
                              agent_family="pi"),
@@ -449,7 +449,7 @@ class AttachTests(unittest.TestCase):
         self.assertEqual(outcome, "appended")
         self.assertEqual(len(self.ops.create_calls), len(before) + 1)
         resume = self.ops.create_calls[-1]
-        self.assertEqual(resume["cwd"], "/Users/mango")
+        self.assertEqual(resume["cwd"], "/Users/demo")
         self.assertNotEqual(resume["cwd"], "/tmp")
         self.assertIn("--session", resume["argv"])
         self.assertIn(str(native), resume["argv"])
@@ -458,14 +458,14 @@ class AttachTests(unittest.TestCase):
         self.assertNotIn("--ephemeral", resume["argv"])
 
     def test_live_process_cwd_finds_lsof_when_path_has_no_sbin(self):
-        lsof = mock.Mock(returncode=0, stdout="p123\nfcwd\nn/Users/mango\n")
+        lsof = mock.Mock(returncode=0, stdout="p123\nfcwd\nn/Users/demo\n")
         with mock.patch.object(os, "readlink", side_effect=OSError("no /proc")), \
              mock.patch.dict(os.environ, {"PATH": "/bin"}, clear=False), \
              mock.patch.object(sup_mod.os.path, "isdir", return_value=True), \
              mock.patch.object(sup_mod.os.path, "isfile", side_effect=lambda p: p == "/usr/sbin/lsof"), \
              mock.patch.object(sup_mod.subprocess, "run", return_value=lsof) as run:
             cwd = sup_mod._live_process_cwd(123)
-        self.assertEqual(cwd, "/Users/mango")
+        self.assertEqual(cwd, "/Users/demo")
         argv = run.call_args[0][0]
         self.assertTrue(os.path.isabs(argv[0]))
         self.assertTrue(argv[0].endswith("/lsof"))

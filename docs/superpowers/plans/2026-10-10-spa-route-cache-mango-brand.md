@@ -30,7 +30,7 @@
 - [x] **Step 1: Add browser assertions for same-route reload and view preservation**
 - [x] **Step 2: Run the focused Chromium test and record the current failure**
 
-Run: `FLEET_PLAYWRIGHT_MODULE=/tmp/agent-fleet-playwright/node_modules/playwright FLEET_BROWSER_CHANNEL=chrome PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. /Users/mango/project/codex/agent-fleet/.venv/bin/python -m pytest tests/test_frontend_browser.py::test_assistant_auth_in_real_browser -q --tb=short`
+Run: `FLEET_PLAYWRIGHT_MODULE=/tmp/agent-fleet-playwright/node_modules/playwright FLEET_BROWSER_CHANNEL=chrome PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. <repo>/.venv/bin/python -m pytest tests/test_frontend_browser.py::test_assistant_auth_in_real_browser -q --tb=short`
 
 Expected before implementation: the same-route click changes `performance.timeOrigin` and fails the assertion.
 

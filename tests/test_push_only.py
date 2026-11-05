@@ -218,7 +218,7 @@ class DeployScriptHygieneTests(unittest.TestCase):
             source = (self.root / relative).read_text()
             self.assertNotIn("${FLEET_USER:-fleet}", source, relative)
             self.assertNotIn("${HOME}/agent-fleet", source, relative)
-            self.assertNotIn("/home/mango", source, relative)
+            self.assertNotIn("/home/demo", source, relative)
             proc = self._run(relative)
             self.assertEqual(proc.returncode, 2, relative)
             self.assertRegex(proc.stderr, r"FLEET_")

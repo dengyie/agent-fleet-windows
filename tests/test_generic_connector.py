@@ -13,9 +13,9 @@ from connectors.generic import GenericConnector
 
 def test_enumerate_processes_filters_by_pattern(monkeypatch):
     rows = [
-        discovery.ProcRow("mango", 201, 201, "/usr/bin/opencode",
+        discovery.ProcRow("demo", 201, 201, "/usr/bin/opencode",
                           "opencode", "2026-08-30T00:00:00Z"),
-        discovery.ProcRow("mango", 202, 202, "/usr/local/bin/aider",
+        discovery.ProcRow("demo", 202, 202, "/usr/local/bin/aider",
                           "aider", "2026-08-30T00:00:00Z"),
         discovery.ProcRow("root", 203, 203, "/usr/sbin/sshd",
                           "sshd", "2026-08-30T00:00:00Z"),

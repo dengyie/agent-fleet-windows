@@ -79,7 +79,7 @@ class SessionSearchRepositoryTests(unittest.TestCase):
                 event(
                     event_id="tool-1",
                     kind="tool_call",
-                    text="pytest /Users/mango/project token=super-secret",
+                    text="pytest /Users/demo/project token=super-secret",
                 )
             )
         )

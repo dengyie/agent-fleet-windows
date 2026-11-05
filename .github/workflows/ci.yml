@@ -54,6 +54,7 @@ jobs:
         with:
           node-version: "22"
       - name: Install browser test runner
+        shell: bash
         run: |
           npm install --prefix "$RUNNER_TEMP/fleet-browser" --no-audit --no-fund --package-lock=false playwright@1.63.0
           "$RUNNER_TEMP/fleet-browser/node_modules/.bin/playwright" install chromium

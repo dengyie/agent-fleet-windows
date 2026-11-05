@@ -97,7 +97,7 @@ def test_service_logs_postcheck_redacts_and_bounds_current_evidence(tmp_path):
     }
 
     node = _node(app, tmp_path, lambda command: {
-        "text": "token=secret-value password=correct horse /Users/mango/private.txt",
+        "text": "token=secret-value password=correct horse /Users/demo/private.txt",
         "truncated": False, "observed_at": 10,
     })
     assert node.poll_once() == {"ok": True, "commands": 1, "receipts": 1}
@@ -107,7 +107,7 @@ def test_service_logs_postcheck_redacts_and_bounds_current_evidence(tmp_path):
     assert postcheck["state"] == "matched"
     assert "secret-value" not in postcheck["result"]["text"]
     assert "correct horse" not in postcheck["result"]["text"]
-    assert "/Users/mango/private.txt" not in postcheck["result"]["text"]
+    assert "/Users/demo/private.txt" not in postcheck["result"]["text"]
     assert len(postcheck["result"]["text"].encode()) <= 1024
     assert "secret-value" not in result.get_data(as_text=True)
     assert commands.get("logs-1")["status"] == "unknown"

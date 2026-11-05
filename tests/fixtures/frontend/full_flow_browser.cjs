@@ -16,7 +16,7 @@ const origin = process.argv[2];
     // nondeterministic local browser scheduling.
     await page.goto(origin + '/assistant', {waitUntil: 'domcontentloaded'});
     await page.waitForURL('**/login?**', {waitUntil: 'domcontentloaded'});
-    await page.getByLabel('账号或邮箱', {exact: true}).fill('mango');
+    await page.getByLabel('账号或邮箱', {exact: true}).fill('demo-operator');
     await page.getByLabel('密码', {exact: true}).fill('Full-flow-password-123!');
     await page.getByRole('button', {name: '登录', exact: true}).click();
     await page.waitForURL('**/assistant', {waitUntil: 'domcontentloaded'});
