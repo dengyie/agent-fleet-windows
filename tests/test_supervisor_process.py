@@ -1266,6 +1266,7 @@ class SupervisorTests(unittest.TestCase):
 # stream).  Uses a real os.pipe, no subprocess, no shell.
 # --------------------------------------------------------------------------- #
 
+@unittest.skipIf(sys.platform == "win32", "POSIX pipe pump only; Windows runs its own WindowsGroupOps.reader path")
 class RealPipePumpBoundsTests(unittest.TestCase):
     def test_pump_bounds_abuf_under_big_line_free_stream(self):
         ops = sup_mod.POSIXGroupOps()
@@ -1281,7 +1282,12 @@ class RealPipePumpBoundsTests(unittest.TestCase):
 
         def writer():
             chunk = b"x" * 65536
-            while not stop.is_set():
+            # Bounded production: Windows pipes have no reader after pump
+            # times out, so an infinite writer would block in os.write
+            # forever (POSIX recovers via EPIPE, Windows does not). 4MB of
+            # line-free bytes is far past any unbounded-buffer growth window
+            # while still exercising the cap.
+            for _ in range(64):
                 try:
                     os.write(w, chunk)
                 except OSError:
@@ -1303,12 +1309,8 @@ class RealPipePumpBoundsTests(unittest.TestCase):
             pr = ops.pump(h, 0.4)
         finally:
             stop.set()
-            try:
-                os.close(w)
-            except OSError:
-                pass
-            h.proc.stdout.close()
             tw.join(timeout=3)
+            h.proc.stdout.close()
             ts.join(timeout=3)
         # pr is a bounded status; _abuf must never have grown past the cap
         self.assertIn(pr, ("line", "timeout", "eof"))
