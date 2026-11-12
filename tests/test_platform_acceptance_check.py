@@ -105,10 +105,15 @@ def test_release_cli_invalid_credentials_cannot_create_runs(release_target, caps
 
 
 def test_release_cli_private_credentials_and_catalog_are_required(release_target, capsys):
+    import os
+
     hub, credentials, args = release_target
-    credentials.chmod(0o644)
-    assert main(args + ['--model', 'read-only']) == 1
-    assert json.loads(capsys.readouterr().out)['error'] == 'credentials_file_not_private'
+    if os.name != 'nt':
+        # Windows 的 chmod 是 no-op（st_mode 恒 0o666），构造不出"非私有"前提，
+        # 私有性由 NTFS ACL 保障；该前提分支只在 POSIX 上验证。
+        credentials.chmod(0o644)
+        assert main(args + ['--model', 'read-only']) == 1
+        assert json.loads(capsys.readouterr().out)['error'] == 'credentials_file_not_private'
     credentials.chmod(0o600)
     assert main(args + ['--model', 'missing']) == 1
     assert json.loads(capsys.readouterr().out)['error'] == 'selected_model_unavailable'

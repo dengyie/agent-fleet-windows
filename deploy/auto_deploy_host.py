@@ -95,7 +95,11 @@ class HostHooks:
     def publish(self, frontend):
         text = self.original
         if frontend is not None:
-            text = re.sub(r'(^\s*root\s+)[^;]+;', lambda match: match[1] + str(frontend) + ';', text, count=1, flags=re.M)
+            # nginx 配置永远是 POSIX 路径；Windows 观测主机上 str(Path) 会
+            # 产生反斜杠，写进去就是坏配置，落盘前统一转 POSIX。
+            text = re.sub(r'(^\s*root\s+)[^;]+;',
+                          lambda match: match[1] + Path(frontend).as_posix() + ';',
+                          text, count=1, flags=re.M)
         self.write_nginx(text)
 
     def public_verify(self, sha, *, timeout=30):

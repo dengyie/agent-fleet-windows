@@ -307,7 +307,9 @@ def test_receiver_failures_never_report_success_or_leave_partial_upload(tmp_path
     config = SimpleNamespace(stat=lambda: SimpleNamespace(st_uid=0, st_mode=0o600),
                              read_text=lambda: json.dumps({'state': str(tmp_path)}))
     monkeypatch.setattr(ssh, 'CONFIG', config)
-    monkeypatch.setattr(ssh.os, 'geteuid', lambda: 0)
+    # Windows 的 os 没有 geteuid；raising=False 为测试期注入该属性，
+    # 接收端的 root/私有性断言语义本身不变。
+    monkeypatch.setattr(ssh.os, 'geteuid', lambda: 0, raising=False)
     monkeypatch.setattr(ssh.sys, 'argv', ['receiver', f'check {NEW} 100 {hashlib.sha256(body).hexdigest()} {len(body)}'])
     monkeypatch.setattr(ssh.sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(b'' if failure == 'upload' else body)))
 

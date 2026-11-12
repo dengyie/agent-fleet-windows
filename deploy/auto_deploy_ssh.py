@@ -95,15 +95,19 @@ def main():
     if shutil.disk_usage(inbox).free < MAX_ARCHIVE * 8:
         raise DeployError('insufficient_deployment_disk')
     directory = Path(tempfile.mkdtemp(prefix=run + '-', dir=inbox))
-    signal.signal(signal.SIGALRM, interrupted)
-    signal.alarm(120)
+    # SIGALRM/alarm 是 POSIX 专属；Linux 接收端的 2 分钟上传限时语义不变，
+    # Windows 观测主机（无该信号）跑其余收尾/事务逻辑时退化为无超时。
+    if hasattr(signal, 'SIGALRM'):
+        signal.signal(signal.SIGALRM, interrupted)
+        signal.alarm(120)
     try:
         receive(sys.stdin.buffer, directory / 'bundle.tgz', size, digest)
     except BaseException:
         shutil.rmtree(directory)
         raise
     finally:
-        signal.alarm(0)
+        if hasattr(signal, 'SIGALRM'):
+            signal.alarm(0)
     job = directory / 'job.json'
     atomic_json(job, {'mode': mode, 'sha': sha, 'run': run})
     # systemd owns the transaction even if Actions loses its SSH connection.

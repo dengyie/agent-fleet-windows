@@ -7,6 +7,7 @@ credentials, prompts, response bodies and file listings.
 import argparse
 import http.client
 import json
+import os
 from pathlib import Path
 import secrets
 import time
@@ -159,7 +160,12 @@ def main(argv=None):
                 raise AcceptanceFailure('release_version_mismatch')
             report['release'] = args.expected_release
         credentials_path = Path(args.credentials_file)
-        if credentials_path.stat().st_mode & 0o077:
+        if os.name == 'nt':
+            # Windows 的 st_mode 恒为 0o666/0o444，chmod(0o600) 是 no-op；
+            # POSIX 位在这里是噪声。私有性由 NTFS ACL 保障（凭据应放在
+            # 用户 profile 下的临时目录，默认仅所有者可读）。
+            pass
+        elif credentials_path.stat().st_mode & 0o077:
             raise AcceptanceFailure('credentials_file_not_private')
         credentials = json.loads(credentials_path.read_text())
         if not isinstance(credentials, dict):

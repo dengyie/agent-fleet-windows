@@ -1,6 +1,5 @@
 """Validated CI bundles and an in-place, data-preserving deployment transaction."""
 from contextlib import contextmanager
-import fcntl
 import hashlib
 import json
 import os
@@ -10,6 +9,11 @@ import shutil
 import sqlite3
 import tarfile
 import tempfile
+
+try:  # pragma: no cover - 部署只在 Linux 容器执行；Windows 观测主机需可导入。
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None
 
 MANAGED = (
     'agent_profiles.py', 'README.md', 'requirements.txt', 'requirements-test.txt',
@@ -33,7 +37,9 @@ def identity(sha, run):
 def atomic_json(path, value):
     temporary = path.with_suffix('.tmp')
     temporary.write_text(json.dumps(value, sort_keys=True) + '\n')
-    with temporary.open('rb') as stream:
+    # fsync 需要 写句柄：Windows 对只读 fd 直接 EBADF（Linux 允许），
+    # 'r+b' 不截断、两平台都能落盘。
+    with temporary.open('r+b') as stream:
         os.fsync(stream.fileno())
     temporary.replace(path)
 
@@ -163,6 +169,11 @@ class Deployment:
 
     @contextmanager
     def lock(self):
+        # fcntl 缺席的平台（Windows 观测主机）退化为无跨进程锁：部署事务
+        # 本身只在 Linux 容器跑，这里保证模块可导入、事务逻辑可测试。
+        if fcntl is None:
+            yield
+            return
         with (self.state / 'deploy.lock').open('a') as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
