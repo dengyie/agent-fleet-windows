@@ -38,7 +38,10 @@ jobs:
   # ubuntu 上执行。先以非阻塞方式收集 Windows 失败面，全绿后再转阻塞。
   windows-test:
     runs-on: windows-latest
-    timeout-minutes: 25
+    # 实测三次 run 均在 25 分整点被 cancel（a3dcf53 25m11s、df308d9 25m13s），
+    # 是撞本 job 超时而非 runner 容量回收；Windows 套件含浏览器链路，比 Linux
+    # test（15 分钟上限）慢，放宽到 45 分钟。
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
