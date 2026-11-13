@@ -305,7 +305,8 @@ def test_receiver_failures_never_report_success_or_leave_partial_upload(tmp_path
     import hashlib
     body = b'bundle'
     config = SimpleNamespace(stat=lambda: SimpleNamespace(st_uid=0, st_mode=0o600),
-                             read_text=lambda: json.dumps({'state': str(tmp_path)}))
+                             # read_text 现在带 encoding="utf-8" 调用，签名跟产品代码对齐。
+                             read_text=lambda *, encoding=None: json.dumps({'state': str(tmp_path)}))
     monkeypatch.setattr(ssh, 'CONFIG', config)
     # Windows 的 os 没有 geteuid；raising=False 为测试期注入该属性，
     # 接收端的 root/私有性断言语义本身不变。
