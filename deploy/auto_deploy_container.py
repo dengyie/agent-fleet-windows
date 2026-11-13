@@ -48,7 +48,7 @@ def process_identity(root, path):
                  if any(arg == suffix or arg.endswith('/' + suffix) for arg in argv)), None)
     if kind is None:
         return None
-    stat = path.joinpath('stat').read_text()
+    stat = path.joinpath('stat').read_text(encoding="utf-8")
     started = stat[stat.rfind(') ') + 2:].split()[19]
     return int(path.name), kind, started
 
@@ -209,7 +209,7 @@ def main():
                         'from hub import web; from hub.bootstrap import create_app'],
                        cwd=data['stage'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
     elif mode == 'verify':
-        origin = dict(line.split(': ', 1) for line in (root / 'RELEASE_ORIGIN').read_text().splitlines())
+        origin = dict(line.split(': ', 1) for line in (root / 'RELEASE_ORIGIN').read_text(encoding="utf-8").splitlines())
         if origin.get('commit') != data['sha']:
             raise RuntimeError('backend_revision_mismatch')
         deadline = time.monotonic() + 30

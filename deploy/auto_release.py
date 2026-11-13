@@ -36,7 +36,7 @@ def identity(sha, run):
 
 def atomic_json(path, value):
     temporary = path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(value, sort_keys=True) + '\n')
+    temporary.write_text(json.dumps(value, sort_keys=True) + '\n', encoding='utf-8')
     # fsync 需要 写句柄：Windows 对只读 fd 直接 EBADF（Linux 允许），
     # 'r+b' 不截断、两平台都能落盘。
     with temporary.open('r+b') as stream:
@@ -76,7 +76,7 @@ def safe_extract(archive, target, *, bundle=False):
 
 def validate_stage(stage, sha, run):
     identity(sha, run)
-    metadata = json.loads((stage / 'release.json').read_text())
+    metadata = json.loads((stage / 'release.json').read_text(encoding="utf-8"))
     if metadata != {'sha': sha, 'run': str(run)}:
         raise DeployError('bundle_identity_mismatch')
     backend, frontend = stage / 'backend', stage / 'frontend'
@@ -84,10 +84,10 @@ def validate_stage(stage, sha, run):
         raise DeployError('incomplete_backend')
     if {p.name for p in backend.iterdir()} - set((*MANAGED, 'fleet-gates.conf')):
         raise DeployError('runtime_in_backend')
-    origin = dict(line.split(': ', 1) for line in (backend / 'RELEASE_ORIGIN').read_text().splitlines())
+    origin = dict(line.split(': ', 1) for line in (backend / 'RELEASE_ORIGIN').read_text(encoding="utf-8").splitlines())
     if origin.get('commit') != sha or origin.get('run') != str(run):
         raise DeployError('backend_identity_mismatch')
-    manifest = json.loads((frontend / 'manifest.json').read_text())
+    manifest = json.loads((frontend / 'manifest.json').read_text(encoding="utf-8"))
     files = {p.relative_to(frontend).as_posix() for p in frontend.rglob('*') if p.is_file()}
     if (manifest.get('version') != sha or 'index.html' not in files
             or len(manifest.get('files', [])) != len(set(manifest.get('files', [])))
@@ -107,7 +107,7 @@ def build_bundle(backend_archive, frontend, output, sha, run):
         if any(p.is_symlink() for p in frontend.rglob('*')):
             raise DeployError('frontend_link')
         shutil.copytree(frontend, stage / 'frontend')
-        (stage / 'release.json').write_text(json.dumps({'sha': sha, 'run': str(run)}))
+        (stage / 'release.json').write_text(json.dumps({'sha': sha, 'run': str(run)}), encoding="utf-8")
         validate_stage(stage, sha, run)
         with tarfile.open(output, 'w:gz') as archive:
             for name in ('backend', 'frontend', 'release.json'):
@@ -190,7 +190,7 @@ class Deployment:
             if pending.exists():
                 raise DeployError('unfinished_deployment_requires_recovery')
             last_path = self.state / 'last-success.json'
-            last = json.loads(last_path.read_text()) if last_path.exists() else None
+            last = json.loads(last_path.read_text(encoding="utf-8")) if last_path.exists() else None
             if last and int(run) < int(last['run']):
                 raise DeployError('stale_deployment')
             self.hooks.preflight(stage / 'backend')
@@ -204,7 +204,7 @@ class Deployment:
             code = backup / 'code'
             code.mkdir()
             copy_managed(self.live, code)
-            old_origin = dict(line.split(': ', 1) for line in (code / 'RELEASE_ORIGIN').read_text().splitlines())
+            old_origin = dict(line.split(': ', 1) for line in (code / 'RELEASE_ORIGIN').read_text(encoding="utf-8").splitlines())
             old_sha = old_origin['commit']
             self.hooks.save(backup)
             record = {'sha': sha, 'run': str(run), 'backup': str(backup), 'phase': 'prepared'}

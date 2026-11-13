@@ -51,8 +51,8 @@ def execute_job(job_path):
         from .auto_deploy_host import HostHooks
     except ImportError:
         from auto_deploy_host import HostHooks
-    config = json.loads(CONFIG.read_text())
-    job = json.loads(job_path.read_text())
+    config = json.loads(CONFIG.read_text(encoding="utf-8"))
+    job = json.loads(job_path.read_text(encoding="utf-8"))
     result_path = job_path.parent / 'result.json'
     try:
         stage = job_path.parent / 'stage'
@@ -89,7 +89,7 @@ def main():
     if len(sys.argv) != 2:
         raise DeployError('forced_command_required')
     mode, sha, run, digest, size = parse_command(sys.argv[1])
-    config = json.loads(CONFIG.read_text())
+    config = json.loads(CONFIG.read_text(encoding="utf-8"))
     inbox = Path(config['state']) / 'incoming'
     inbox.mkdir(parents=True, exist_ok=True, mode=0o700)
     if shutil.disk_usage(inbox).free < MAX_ARCHIVE * 8:
@@ -119,7 +119,7 @@ def main():
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     result = directory / 'result.json'
     if result.exists():
-        outcome = json.loads(result.read_text())
+        outcome = json.loads(result.read_text(encoding="utf-8"))
     else:
         outcome = {'status': 'unconfirmed', 'sha': sha, 'run': run}
     print(json.dumps(outcome))

@@ -64,7 +64,7 @@ class JsonlObservationRepository:
         except OSError:
             return False
         try:
-            lines = f.read_text().splitlines()
+            lines = f.read_text(encoding="utf-8").splitlines()
         except OSError:
             return False
         keep = lines[-self.keep_lines:]
@@ -129,7 +129,7 @@ class JsonlObservationRepository:
             return None
         with self._locks[validated]:
             try:
-                return json.loads(f.read_text())
+                return json.loads(f.read_text(encoding="utf-8"))
             except Exception:
                 return None
 
@@ -141,7 +141,7 @@ class JsonlObservationRepository:
             return []
         with self._locks[validated]:
             out = []
-            for line in f.read_text().splitlines()[-limit:]:
+            for line in f.read_text(encoding="utf-8").splitlines()[-limit:]:
                 try:
                     out.append(json.loads(line))
                 except Exception:

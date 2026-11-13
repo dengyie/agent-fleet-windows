@@ -16,7 +16,7 @@ class HostHooks:
     def __init__(self, config):
         self.config = config
         self.nginx = Path(config['nginx_config'])
-        self.original = self.nginx.read_text()
+        self.original = self.nginx.read_text(encoding="utf-8")
         self.marker = Path(config['maintenance_marker'])
         if self.marker.exists():
             raise DeployError('existing_maintenance_barrier')
@@ -36,7 +36,7 @@ class HostHooks:
             path = Path(self.config['account_credentials'])
             if path.stat().st_mode & 0o077:
                 raise DeployError('account_credentials_not_private')
-            data['credentials'] = json.loads(path.read_text())
+            data['credentials'] = json.loads(path.read_text(encoding="utf-8"))
         # The helper is installed outside the release and contains no product imports.
         helper = Path(__file__).with_name('auto_deploy_container.py').read_bytes()
         self.run(['docker', 'exec', '-i', '-u', self.config['container_user'], self.config['container'],
@@ -56,16 +56,16 @@ class HostHooks:
             self.run(['docker', 'exec', '-u', 'root', self.config['container'], 'rm', '-rf', path])
 
     def save(self, backup):
-        (backup / 'nginx.conf').write_text(self.original)
+        (backup / 'nginx.conf').write_text(self.original, encoding="utf-8")
 
     def write_nginx(self, text):
-        previous = self.nginx.read_text()
-        self.nginx.write_text(text)
+        previous = self.nginx.read_text(encoding="utf-8")
+        self.nginx.write_text(text, encoding="utf-8")
         try:
             self.run(['nginx', '-t'])
             self.run(['systemctl', 'reload', 'nginx'])
         except BaseException:
-            self.nginx.write_text(previous)
+            self.nginx.write_text(previous, encoding="utf-8")
             self.run(['nginx', '-t'])
             self.run(['systemctl', 'reload', 'nginx'])
             raise

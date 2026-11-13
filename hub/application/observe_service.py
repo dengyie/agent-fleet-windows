@@ -112,7 +112,7 @@ class HostConfig:
             if path is None or not Path(path).exists():
                 data = {}
             else:
-                data = yaml.safe_load(Path(path).read_text()) or {}
+                data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         except (OSError, ImportError, ValueError):
             data = {}
         if not isinstance(data, dict):

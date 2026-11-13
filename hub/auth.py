@@ -72,7 +72,7 @@ def load_supervisor_credentials():
     try:
         path = FLEET_HOME / "credentials" / "supervisor-credentials.json"
         if path.exists():
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 return {str(k): str(v) for k, v in data.items() if k and v}
     except (OSError, ValueError, TypeError):
@@ -107,7 +107,7 @@ def load_supervisor_signing_key():
     try:
         path = FLEET_HOME / "credentials" / "supervisor-signing.key"
         if path.exists():
-            return _decode(path.read_text().strip())
+            return _decode(path.read_text(encoding="utf-8").strip())
     except OSError:
         return None
     return None
@@ -140,7 +140,7 @@ def load_platform_command_signing_key():
     try:
         path = FLEET_HOME / "credentials" / "platform-command-signing.key"
         if path.exists():
-            return _decode(path.read_text().strip())
+            return _decode(path.read_text(encoding="utf-8").strip())
     except OSError:
         return None
     return None
@@ -235,7 +235,7 @@ def resolve_ingest_token(cli_token=None):
         return env
     try:
         if INGEST_TOKEN_FILE.exists():
-            return INGEST_TOKEN_FILE.read_text().strip() or None
+            return INGEST_TOKEN_FILE.read_text(encoding="utf-8").strip() or None
     except Exception:
         pass
     return None
@@ -248,7 +248,7 @@ def load_runner_credentials():
     """
     try:
         if RUNNER_CREDENTIALS_FILE.exists():
-            data = json.loads(RUNNER_CREDENTIALS_FILE.read_text())
+            data = json.loads(RUNNER_CREDENTIALS_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 return {str(k): str(v) for k, v in data.items()}
     except Exception:

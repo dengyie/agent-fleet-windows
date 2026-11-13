@@ -20,6 +20,14 @@ class SupervisorCommandRepositoryError(RuntimeError):
         super().__init__(code)
 
 
+def _uid_is_current(info: os.stat_result) -> bool:
+    # Windows 没有 os.getuid；st_uid 恒为 0/噪音值，属主校验由 NTFS ACL
+    # 语义承接（用户 profile 下默认仅所有者可读），POSIX 位在 nt 上是噪声。
+    if os.name == "nt":
+        return True
+    return info.st_uid == os.getuid()
+
+
 class SupervisorCommandRepository:
     """SQLite-backed command outbox with atomic claim and receipt updates."""
 
@@ -35,10 +43,10 @@ class SupervisorCommandRepository:
                 raise SupervisorCommandRepositoryError("command_private_store")
             path.mkdir(parents=True, exist_ok=True, mode=0o700)
             info = path.stat()
-            if path.is_symlink() or info.st_uid != os.getuid():
+            if path.is_symlink() or not _uid_is_current(info):
                 raise SupervisorCommandRepositoryError("command_private_store")
             os.chmod(path, 0o700)
-            if path.stat().st_mode & 0o077:
+            if os.name != "nt" and path.stat().st_mode & 0o077:
                 raise SupervisorCommandRepositoryError("command_private_store")
         except SupervisorCommandRepositoryError:
             raise
@@ -54,10 +62,10 @@ class SupervisorCommandRepository:
                 fd = os.open(self.db_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 os.close(fd)
             info = self.db_path.stat()
-            if not self.db_path.is_file() or info.st_uid != os.getuid():
+            if not self.db_path.is_file() or not _uid_is_current(info):
                 raise SupervisorCommandRepositoryError("command_private_store")
             os.chmod(self.db_path, 0o600)
-            if self.db_path.stat().st_mode & 0o077:
+            if os.name != "nt" and self.db_path.stat().st_mode & 0o077:
                 raise SupervisorCommandRepositoryError("command_private_store")
         except SupervisorCommandRepositoryError:
             raise
@@ -71,10 +79,10 @@ class SupervisorCommandRepository:
                 continue
             try:
                 info = path.stat()
-                if path.is_symlink() or not path.is_file() or info.st_uid != os.getuid():
+                if path.is_symlink() or not path.is_file() or not _uid_is_current(info):
                     raise SupervisorCommandRepositoryError("command_private_store")
                 os.chmod(path, 0o600)
-                if path.stat().st_mode & 0o077:
+                if os.name != "nt" and path.stat().st_mode & 0o077:
                     raise SupervisorCommandRepositoryError("command_private_store")
             except SupervisorCommandRepositoryError:
                 raise

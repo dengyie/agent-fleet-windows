@@ -105,14 +105,26 @@ class MuseBridge:
 
     @contextmanager
     def _store(self):
-        import fcntl  # local bridge runs on macOS/Linux; Hub imports stay portable
+        # 锁随平台：POSIX flock；Windows 用 msvcrt 字节锁（与 artifact_lock
+        # 同一模式）。锁只在持有期间防并发写，语义两平台一致。
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         lock_fd = os.open(str(self.path) + '.lock', os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise MuseBridgeError('bridge_busy') from exc
+            if os.name == 'nt':
+                import msvcrt
+                os.lseek(lock_fd, 0, os.SEEK_SET)
+                try:
+                    msvcrt.locking(lock_fd, msvcrt.LK_NBLCK, 1)
+                except PermissionError as exc:
+                    # msvcrt 非阻塞冲突抛 PermissionError(EACCES)，POSIX 抛
+                    # BlockingIOError；统一映射为 bridge_busy。
+                    raise MuseBridgeError('bridge_busy') from exc
+            else:
+                import fcntl  # local bridge runs on macOS/Linux; Hub imports stay portable
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise MuseBridgeError('bridge_busy') from exc
             fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
             os.close(fd)
             connection = sqlite3.connect(self.path, timeout=2)

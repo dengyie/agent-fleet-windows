@@ -30,7 +30,7 @@ DEFAULTS = {
 def _thresholds():
     try:
         import yaml
-        cfg = yaml.safe_load((FLEET_HOME / "hosts.yaml").read_text())
+        cfg = yaml.safe_load((FLEET_HOME / "hosts.yaml").read_text(encoding="utf-8"))
         return cfg.get("thresholds", DEFAULTS)
     except Exception:
         return DEFAULTS

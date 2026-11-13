@@ -43,7 +43,7 @@ def _proc_identity(pid: int) -> tuple[str, str, int] | None:
         )
         cwd = os.path.realpath(proc / "cwd")
         uid_line = next(
-            line for line in (proc / "status").read_text().splitlines()
+            line for line in (proc / "status").read_text(encoding="utf-8").splitlines()
             if line.startswith("Uid:")
         )
         uid = int(uid_line.split()[1])
@@ -217,7 +217,7 @@ class AgentFleetGuardian:
             # TERM or KILL after the identity check.
             if self.web_pid_file.exists():
                 try:
-                    old_pid = int(self.web_pid_file.read_text().strip())
+                    old_pid = int(self.web_pid_file.read_text(encoding="utf-8").strip())
                     if old_pid <= 0:
                         raise ValueError("PID must be positive")
                 except (ValueError, OSError) as error:
@@ -275,7 +275,7 @@ class AgentFleetGuardian:
                 new_pid = proc.pid
 
             # Write PID file
-            self.web_pid_file.write_text(str(new_pid))
+            self.web_pid_file.write_text(str(new_pid), encoding="utf-8")
             logger.info(f"Web service started: PID {new_pid}")
 
             # Step 3: Verify started

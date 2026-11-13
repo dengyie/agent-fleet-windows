@@ -167,7 +167,7 @@ def main(argv=None):
             pass
         elif credentials_path.stat().st_mode & 0o077:
             raise AcceptanceFailure('credentials_file_not_private')
-        credentials = json.loads(credentials_path.read_text())
+        credentials = json.loads(credentials_path.read_text(encoding="utf-8"))
         if not isinstance(credentials, dict):
             raise AcceptanceFailure('invalid_credentials_file')
         login = credentials.get('username') or credentials.get('email')

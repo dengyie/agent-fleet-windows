@@ -1795,7 +1795,7 @@ class Supervisor:
         out: dict[str, ManagedSessionManifest] = {}
         for p in sorted(self._manifest_dir.glob(f"*{self.MANIFEST_SUFFIX}")):
             try:
-                m = ManagedSessionManifest.from_json(p.read_text())
+                m = ManagedSessionManifest.from_json(p.read_text(encoding="utf-8"))
             except Exception:
                 continue
             if not m.session_id or not m.process_group_id:
@@ -1813,7 +1813,7 @@ class Supervisor:
         target = self._manifest_dir / f"{m.session_id}{self.MANIFEST_SUFFIX}"
         tmp = target.with_suffix(".json.tmp")
         try:
-            tmp.write_text(m.to_json())
+            tmp.write_text(m.to_json(), encoding="utf-8")
             os.replace(str(tmp), str(target))
         except OSError:
             raise GroupError("manifest_write_failed")

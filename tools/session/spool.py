@@ -739,11 +739,15 @@ class LocalSpool:
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, self._checkpoint_path)
-            dfd = os.open(self._cp_dir, os.O_RDONLY)
-            try:
-                os.fsync(dfd)
-            finally:
-                os.close(dfd)
+            # 目录 fsync 是 POSIX 惯例（把 rename 的目录项落盘）；Windows
+            # 目录句柄不支持 fsync（必抛 OSError），os.replace 在 NTFS 上
+            # 本身已原子，无需该步。
+            if os.name != "nt":
+                dfd = os.open(self._cp_dir, os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
         except OSError:
             raise SpoolError(CODE_CHECKPOINT_BAD) from None
 

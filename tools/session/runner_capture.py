@@ -41,7 +41,7 @@ class RunnerCapture:
         })
         if not self.record.exists():
             # No credential or prompt in this recovery index.
-            self.record.write_text(json.dumps({k: task[k] for k in ('attempt_id', 'agent_type', 'task_id')}))
+            self.record.write_text(json.dumps({k: task[k] for k in ('attempt_id', 'agent_type', 'task_id')}), encoding="utf-8")
             self.bridge.start()
             self.bridge.ingest_one({'kind': 'session_metadata', 'payload': {'task_id': task['task_id']}})
             if 'instruction' in task:
@@ -106,7 +106,7 @@ def replay_pending(cfg, post):
     for record in root.glob(session_prefix(cfg.machine) + '*.json'):
         capture = None
         try:
-            capture = RunnerCapture(cfg, json.loads(record.read_text()), post)
+            capture = RunnerCapture(cfg, json.loads(record.read_text(encoding="utf-8")), post)
             capture.flush()
         except Exception:
             log.exception('Conversation replay failed: %s', record.name)

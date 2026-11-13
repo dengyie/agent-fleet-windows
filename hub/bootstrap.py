@@ -35,7 +35,7 @@ def _load_hosts_rows(hosts_file) -> list[dict]:
         path = _Path(hosts_file)
         if not path.exists():
             return []
-        data = yaml.safe_load(path.read_text()) or {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except (OSError, ImportError, ValueError):
         return []
     if not isinstance(data, dict):
