@@ -25,22 +25,22 @@ class AdoptionPhase2ViewTests(unittest.TestCase):
     """machine.js Phase 2: metadata + wired adopt, no view-owned HTTP."""
 
     def test_machine_view_exports_readonly_instances_renderer(self):
-        source = MACHINE_JS.read_text()
+        source = MACHINE_JS.read_text(encoding="utf-8")
         self.assertIn('export function renderInstances(instances, onAdopt)',
                       source)
 
     def test_render_instances_is_wired_into_the_detail_view(self):
-        source = MACHINE_JS.read_text()
+        source = MACHINE_JS.read_text(encoding="utf-8")
         self.assertIn('renderInstances(live.instances, onAdopt)', source)
         self.assertIn('live.instances', source)
 
     def test_machine_snapshot_reads_instances_metadata(self):
-        source = MACHINE_JS.read_text()
+        source = MACHINE_JS.read_text(encoding="utf-8")
         self.assertIn('instances', source)
         self.assertIn('detail.current.instances', source)
 
     def test_render_instances_uses_dom_safe_writes_only(self):
-        source = MACHINE_JS.read_text()
+        source = MACHINE_JS.read_text(encoding="utf-8")
         for banned in ('innerHTML', 'insertAdjacentHTML', 'outerHTML',
                        'document.write'):
             self.assertNotIn(banned, source, f'machine.js used {banned}')
@@ -48,7 +48,7 @@ class AdoptionPhase2ViewTests(unittest.TestCase):
             self.assertIn(required, source, f'machine.js missing {required}')
 
     def test_render_instances_shows_pid_as_metadata_text_only(self):
-        source = MACHINE_JS.read_text()
+        source = MACHINE_JS.read_text(encoding="utf-8")
         begin = source.index('export function renderInstances')
         end = source.index('/* --- 任务列表', begin)
         block = source[begin:end]
@@ -58,14 +58,14 @@ class AdoptionPhase2ViewTests(unittest.TestCase):
         self.assertIn('addEventListener', block)
 
     def test_phase2_views_do_not_own_http(self):
-        source = MACHINE_JS.read_text()
+        source = MACHINE_JS.read_text(encoding="utf-8")
         for banned in ("'/api/adoptions'", "'/api/adopt'", '/api/sessions',
                        'transcript', 'native_transcript', 'process_handle',
                        'conversation', 'fetch(', 'innerHTML'):
             self.assertNotIn(banned, source, f'machine.js 出现 {banned}')
 
     def test_phase2_wires_onAdopt_and_onAction(self):
-        source = MACHINE_JS.read_text()
+        source = MACHINE_JS.read_text(encoding="utf-8")
         self.assertIn('onAdopt(inst)', source)
         self.assertIn('adoptInstance', source)
         self.assertIn('controlSession', source)
@@ -73,12 +73,12 @@ class AdoptionPhase2ViewTests(unittest.TestCase):
         self.assertIn('listSessions', source)
 
     def test_instance_list_is_bounded_metadata_display(self):
-        source = MACHINE_JS.read_text()
+        source = MACHINE_JS.read_text(encoding="utf-8")
         self.assertIn('MAX_VISIBLE_INSTANCES', source)
         self.assertIn('slice(0, MAX_VISIBLE_INSTANCES)', source)
 
     def test_client_owns_adoption_and_control_paths(self):
-        source = CLIENT_JS.read_text()
+        source = CLIENT_JS.read_text(encoding="utf-8")
         self.assertIn("adoptions: '/adoptions'", source)
         self.assertIn("'/adoption/'", source)
         self.assertIn("'/source/control'", source)
@@ -104,7 +104,7 @@ _CONTROL_END = '/* --- 源控制区结束'
 
 
 def _source_control_block():
-    source = MACHINE_JS.read_text()
+    source = MACHINE_JS.read_text(encoding="utf-8")
     begin = source.index(_CONTROL_START)
     end = source.index(_CONTROL_END, begin)
     return source[begin:end] + '\n'
@@ -120,7 +120,7 @@ class SourceControlViewTests(unittest.TestCase):
     """
 
     def test_source_control_has_fixed_five_action_tokens(self):
-        source = MACHINE_JS.read_text()
+        source = MACHINE_JS.read_text(encoding="utf-8")
         self.assertIn('SOURCE_ACTIONS_LABELS', source)
         begin = source.index('var SOURCE_ACTIONS_LABELS = {')
         end = source.index('};', begin)
@@ -130,14 +130,14 @@ class SourceControlViewTests(unittest.TestCase):
             self.assertIn(token, labels, f'action token {token} 缺失')
 
     def test_source_control_renderer_exported_and_wired(self):
-        source = MACHINE_JS.read_text()
+        source = MACHINE_JS.read_text(encoding="utf-8")
         self.assertIn(
             'export function renderSourceControl(source, actions, onAction)',
             source, 'renderSourceControl 未导出')
         self.assertIn('renderSourceControl(', source, '未挂载 renderSourceControl')
 
     def test_source_control_empty_state_composes_without_adoption(self):
-        source = MACHINE_JS.read_text()
+        source = MACHINE_JS.read_text(encoding="utf-8")
         # 视图没有纳管注册表时 mountMachine 以空 source + no-op 渲染空态，
         # 使区块完整组合而不产生任何副作用。
         self.assertIn('renderSourceControl(null, null, noop)', source)
@@ -160,7 +160,7 @@ class SourceControlViewTests(unittest.TestCase):
             self.assertNotIn(leaked, block, f'源控制区引入了 {leaked}')
 
     def test_source_control_status_whitelist_map(self):
-        source = MACHINE_JS.read_text()
+        source = MACHINE_JS.read_text(encoding="utf-8")
         self.assertIn('SOURCE_STATUS_CLASSES', source)
         begin = source.index('var SOURCE_STATUS_CLASSES = {')
         end = source.index('};', begin)
@@ -173,18 +173,18 @@ class InstanceDtoContractTests(unittest.TestCase):
     """frontend/assets/api/contracts.js 把 instances 保留在 machine current 上。"""
 
     def test_machine_current_allows_sanitized_instances(self):
-        source = CONTRACTS_JS.read_text()
+        source = CONTRACTS_JS.read_text(encoding="utf-8")
         self.assertIn("'instances'", source)
         for field in INSTANCE_FIELDS:
             self.assertIn("'%s'" % field, source, f'contracts missing {field}')
 
     def test_parse_machine_uses_instance_allowlist(self):
-        source = CONTRACTS_JS.read_text()
+        source = CONTRACTS_JS.read_text(encoding="utf-8")
         for token in ('INSTANCE_FIELDS', 'parseInstance', 'out.current.instances'):
             self.assertIn(token, source, f'contracts.js missing {token}')
 
     def test_contracts_applies_pure_dom_safe_writes(self):
-        source = CONTRACTS_JS.read_text()
+        source = CONTRACTS_JS.read_text(encoding="utf-8")
         # contracts 是纯 parser，绝不引用浏览器/DOM 或注入类 API
         for banned in ('innerHTML', 'insertAdjacentHTML', 'document.',
                        'setAttribute', 'textContent'):

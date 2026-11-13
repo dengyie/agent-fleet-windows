@@ -602,7 +602,7 @@ class AgentRunnerTests(unittest.TestCase):
             self.runner.run_task(self.cfg, self._task())
         pending = list((self.temp / "cache" / "pending").glob("*.json"))
         self.assertEqual(len(pending), 1)
-        saved = json.loads(pending[0].read_text())
+        saved = json.loads(pending[0].read_text(encoding="utf-8"))
         self.assertEqual(saved["attempt_id"], "a1")
 
     def test_flush_pending_retries_upload(self):

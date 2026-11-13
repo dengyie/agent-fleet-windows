@@ -733,17 +733,17 @@ class StaticFrontendTests(unittest.TestCase):
     """Task 12 Step 1 static shell contracts (exact brief snippets)."""
 
     def test_frontend_entry_has_no_flask_template_expression(self):
-        source = INDEX_HTML.read_text()
+        source = INDEX_HTML.read_text(encoding="utf-8")
         self.assertNotIn('{{', source)
         self.assertNotIn('url_for', source)
 
     def test_runtime_config_contains_no_credential_names(self):
-        source = CONFIG_JS.read_text()
+        source = CONFIG_JS.read_text(encoding="utf-8")
         for secret_name in ('X-Agent-Fleet-Token', 'X-Runner-Credential', 'private_key'):
             self.assertNotIn(secret_name, source)
 
     def test_runtime_config_exposes_api_base_url_only(self):
-        source = CONFIG_JS.read_text()
+        source = CONFIG_JS.read_text(encoding="utf-8")
         self.assertIn('window.FleetConfig', source)
         self.assertIn('apiBaseUrl', source)
         # Default apiBaseUrl must be the same-origin /api.
@@ -752,20 +752,20 @@ class StaticFrontendTests(unittest.TestCase):
         self.assertIn('Object.freeze', source)
 
     def test_entry_has_page_mount_points(self):
-        source = INDEX_HTML.read_text()
+        source = INDEX_HTML.read_text(encoding="utf-8")
         for mount_id in ('route-view', 'main-content'):
             self.assertIn(mount_id, source)
         self.assertIn('data-nav', source)
 
     def test_entry_loads_module_and_config_scripts(self):
-        source = INDEX_HTML.read_text()
+        source = INDEX_HTML.read_text(encoding="utf-8")
         self.assertIn('type="module"', source)
         self.assertIn('config.js', source)
         self.assertIn('assets/app.js', source)
         self.assertIn('styles/app.css', source)
 
     def test_entry_contains_no_embedded_observation_or_task_data(self):
-        source = INDEX_HTML.read_text()
+        source = INDEX_HTML.read_text(encoding="utf-8")
         # The static shell must not embed any business snapshot values.
         for token in ('hb-online', 'hb-alerts', 'hb-total', 'hb-tasks',
                       'data-machine="', 'data-task-id="', 'state-node'):
@@ -774,13 +774,13 @@ class StaticFrontendTests(unittest.TestCase):
         self.assertNotIn('${', source)
 
     def test_shell_declares_static_server_friendly_doctype_and_assets(self):
-        source = INDEX_HTML.read_text()
+        source = INDEX_HTML.read_text(encoding="utf-8")
         self.assertTrue(source.lstrip().startswith('<!DOCTYPE html>'))
         self.assertIn('<meta charset="utf-8">', source)
         self.assertIn('<meta name="viewport"', source)
 
     def test_canonical_mango_brand_assets_are_fingerprinted_and_verified(self):
-        source = INDEX_HTML.read_text()
+        source = INDEX_HTML.read_text(encoding="utf-8")
         logo = FRONTEND_DIR / 'assets' / 'brand' / 'mango-ddf462d0.png'
         favicon = FRONTEND_DIR / 'assets' / 'brand' / 'mango-cdd3ec60.ico'
         self.assertIn('class="brand-logo"', source)
@@ -796,13 +796,13 @@ class RouteHelperContractTests(unittest.TestCase):
     """Task 12 route helpers: apiPath / pagePath encode segments safely."""
 
     def test_routes_exports_both_helpers(self):
-        source = ROUTES_JS.read_text()
+        source = ROUTES_JS.read_text(encoding="utf-8")
         for helper in ('apiPath', 'pagePath'):
             self.assertIn(f'export function {helper}(', source,
                           f'helper {helper} missing or not exported')
 
     def test_route_helpers_encode_each_path_segment(self):
-        source = ROUTES_JS.read_text()
+        source = ROUTES_JS.read_text(encoding="utf-8")
         # Per-segment percent-encoding must be applied before any join.
         self.assertIn('encodeURIComponent', source)
         self.assertIn('.map(', source)
@@ -810,7 +810,7 @@ class RouteHelperContractTests(unittest.TestCase):
         self.assertIn('join("/")', source)
 
     def test_route_helpers_never_accept_a_raw_slash_as_a_segment(self):
-        source = ROUTES_JS.read_text()
+        source = ROUTES_JS.read_text(encoding="utf-8")
         self.assertIn('throw new Error', source)
         self.assertIn('indexOf("/")', source)
         # Slash rejection must happen before encoding, in a shared guard.
@@ -820,7 +820,7 @@ class RouteHelperContractTests(unittest.TestCase):
 
     def test_route_helpers_reject_dot_and_dotdot_segments(self):
         # Task 13 hardening: '.' / '..' must never become path traversal.
-        source = ROUTES_JS.read_text()
+        source = ROUTES_JS.read_text(encoding="utf-8")
         for guard in ('s === "."', 's === ".."'):
             self.assertIn(guard, source,
                           f'route helper missing {guard} guard')
@@ -834,15 +834,15 @@ class ApiClientSourceTests(unittest.TestCase):
         if not views_dir.is_dir():
             self.skipTest('frontend/assets/views not yet present (Task 15)')
         for path in views_dir.glob('*.js'):
-            self.assertNotIn('fetch(', path.read_text())
+            self.assertNotIn('fetch(', path.read_text(encoding="utf-8"))
 
     def test_client_owns_all_api_paths(self):
-        source = CLIENT_JS.read_text()
+        source = CLIENT_JS.read_text(encoding="utf-8")
         for path in ('/status', '/machines/', '/tasks', '/events'):
             self.assertIn(path, source)
 
     def test_client_exports_all_required_async_functions(self):
-        source = CLIENT_JS.read_text()
+        source = CLIENT_JS.read_text(encoding="utf-8")
         for fn in ('getStatus', 'getMachine', 'getEvents', 'listTasks',
                    'getTask', 'createTask', 'cancelTask', 'retryTask',
                    'pauseTask', 'continueTask', 'confirmTask', 'rejectTask',
@@ -851,26 +851,26 @@ class ApiClientSourceTests(unittest.TestCase):
                           f'client missing {fn}')
 
     def test_api_error_has_stable_kind_status_code_detail_request_id(self):
-        source = CLIENT_JS.read_text()
+        source = CLIENT_JS.read_text(encoding="utf-8")
         for field in ('this.kind', 'this.status', 'this.code', 'this.detail',
                       'this.requestId'):
             self.assertIn(field, source, f'ApiError missing {field}')
 
     def test_client_does_not_add_ingest_or_runner_headers(self):
-        source = CLIENT_JS.read_text()
+        source = CLIENT_JS.read_text(encoding="utf-8")
         for header in ('X-Agent-Fleet-Token', 'X-Runner-Credential',
                        'Cf-Access-Authenticated-User-Email'):
             self.assertNotIn(header, source)
 
     def test_client_uses_no_store_cache_and_bounded_timeout(self):
-        source = CLIENT_JS.read_text()
+        source = CLIENT_JS.read_text(encoding="utf-8")
         self.assertIn('cache: "no-store"', source)
         self.assertIn('AbortController', source)
         self.assertIn('DEFAULT_TIMEOUT_MS', source)
         self.assertIn('setTimeout', source)
 
     def test_client_token_is_local_idempotency_not_a_credential(self):
-        source = CLIENT_JS.read_text()
+        source = CLIENT_JS.read_text(encoding="utf-8")
         self.assertIn('makeClientToken', source)
         self.assertIn('crypto.randomUUID', source)
         self.assertIn('client_token', source)
@@ -878,7 +878,7 @@ class ApiClientSourceTests(unittest.TestCase):
         self.assertNotIn('Authorization: Bearer', source)
 
     def test_contracts_exports_all_required_parsers(self):
-        source = CONTRACTS_JS.read_text()
+        source = CONTRACTS_JS.read_text(encoding="utf-8")
         for fn in ('parseStatus', 'parseMachine', 'parseEvents', 'parseTask',
                    'parseSseEvent', 'parseError', 'parseTaskFile',
                    'parseTaskFileList', 'parseTaskDiff'):
@@ -886,7 +886,7 @@ class ApiClientSourceTests(unittest.TestCase):
                           f'contracts missing {fn}')
 
     def test_contracts_contains_public_allowlists_and_rejections(self):
-        source = CONTRACTS_JS.read_text()
+        source = CONTRACTS_JS.read_text(encoding="utf-8")
         # 公开字段 allowlist 与内部字段拒绝守卫都在 contracts 源码内
         for token in ('TASK_FIELDS', 'RESULT_FIELDS', 'REJECTED_TASK_FIELDS',
                       'GATE_FIELDS', 'TEST_SUMMARY_FIELDS', 'TASK_DIFF_FIELDS',
@@ -956,37 +956,37 @@ class SseBoundaryTests(unittest.TestCase):
     def test_only_sse_module_creates_eventsource(self):
         files = list(FRONTEND_DIR.rglob('*.js'))
         owners = [path for path in files
-                  if 'new EventSource' in path.read_text()]
+                  if 'new EventSource' in path.read_text(encoding="utf-8")]
         self.assertEqual([p.relative_to(REPO_ROOT).as_posix() for p in owners],
                          ['frontend/assets/realtime/sse.js'])
 
     def test_store_deduplicates_or_rejects_stale_event_timestamps(self):
-        source = STORE_JS.read_text()
+        source = STORE_JS.read_text(encoding="utf-8")
         self.assertIn('lastEventTs', source)
         self.assertIn('Math.max', source)
 
     def test_sse_exports_client_lifecycle_interface(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         for token in ('export function SseClient(', 'SseClient.prototype.start',
                       'SseClient.prototype.stop', 'isOpen',
                       'EventSource.OPEN', 'buildStreamUrl'):
             self.assertIn(token, source, f'sse.js missing {token}')
 
     def test_sse_builds_url_with_since_from_last_event_ts(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         self.assertIn('"/stream?since="', source)
         self.assertIn('encodeURIComponent', source)
         # URL 片段必须来自“从 store 读取的”游标，而非硬编码常量
         self.assertIn('getLastEventTs', source)
 
     def test_sse_start_is_idempotent_and_stop_clears_timers(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         self.assertIn('if (this._source)', source)
         self.assertIn('.close()', source)
         self.assertIn('clearInterval', source)
 
     def test_sse_onerror_polls_bounded_and_onopen_clears(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         self.assertIn('disconnected', source)
         self.assertIn('setInterval', source)
         self.assertIn('MAX_POLLS', source)
@@ -994,30 +994,30 @@ class SseBoundaryTests(unittest.TestCase):
         self.assertIn('_clearPoll', source)
 
     def test_sse_has_no_business_reload(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         self.assertNotIn('location.reload', source)
 
     def test_sse_uses_contracts_parser_and_no_dom(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         self.assertIn('parseSseEvent', source)
         for banned in ('document.', 'querySelector'):
             self.assertNotIn(banned, source)
 
     def test_sse_terminal_refresh_calls_injected_client_get_task(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         for token in ('getTask', 'setTask', 'succeeded', 'cancelled',
                       'expired', 'TERMINAL_TASK_STATES'):
             self.assertIn(token, source, f'sse.js missing {token}')
 
     def test_store_is_dom_and_client_agnostic(self):
-        source = STORE_JS.read_text()
+        source = STORE_JS.read_text(encoding="utf-8")
         for banned in ('window.', 'document.', 'fetch(', 'new EventSource',
                        'location.', 'import ', 'resolveApiBaseUrl'):
             self.assertNotIn(banned, source,
                              f'store.js must not reference {banned}')
 
     def test_store_exports_required_fleet_store_interface(self):
-        source = STORE_JS.read_text()
+        source = STORE_JS.read_text(encoding="utf-8")
         for method in ('getState', 'subscribe', 'setStatus', 'setMachine',
                        'setTask', 'applySseEvent', 'setConnection',
                        'getLastEventTs'):
@@ -1025,13 +1025,13 @@ class SseBoundaryTests(unittest.TestCase):
                           f'store.js missing {method}')
 
     def test_store_applies_sse_through_four_event_types(self):
-        source = STORE_JS.read_text()
+        source = STORE_JS.read_text(encoding="utf-8")
         for token in ('machine_update', 'task_update', 'task_log',
                       'fleet_event'):
             self.assertIn(token, source, f'store.js missing {token}')
 
     def test_store_bounds_logs_to_500_text_lines(self):
-        source = STORE_JS.read_text()
+        source = STORE_JS.read_text(encoding="utf-8")
         self.assertIn('MAX_LOG_LINES', source)
         self.assertIn('500', source)
         self.assertIn("typeof data.line !== 'string'", source)
@@ -1039,7 +1039,7 @@ class SseBoundaryTests(unittest.TestCase):
     def test_sse_ignores_events_not_applied_by_store(self):
         # Fix 1：applySseEvent 的布尔结果必须被捕获并作为门控——返回 false
         # （陈旧 / 未知）时不转发 onEvent、不触发终态 getTask 刷新。
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         self.assertIn('var applied', source)
         self.assertIn('applySseEvent({ type: name, data: parsed })', source)
         self.assertIn('if (!applied)', source)
@@ -1047,7 +1047,7 @@ class SseBoundaryTests(unittest.TestCase):
     def test_sse_poll_has_inflight_and_abort_fencing(self):
         # Fix 3：降级轮询同一时间至多一个在途请求；超时用有界的
         # AbortController；stop() 中止在途请求。
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         for token in ('_pollPending', 'if (this._pollPending)',
                       'POLL_TIMEOUT_MS', 'new AbortController()',
                       'signal: controller.signal', 'controller.abort()',
@@ -1055,7 +1055,7 @@ class SseBoundaryTests(unittest.TestCase):
             self.assertIn(token, source, f'sse.js missing {token}')
 
     def test_sse_stop_aborts_any_pending_poll_request(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         self.assertIn('this._pollController.abort()', source)
         # stop() 必须经由 _clearPoll 清空计时器并复位在途栅栏
         self.assertIn('.close()', source)
@@ -1065,14 +1065,14 @@ class SseBoundaryTests(unittest.TestCase):
     def test_store_bounds_task_logs_by_distinct_task_id_count(self):
         # Fix 2：taskLogs 按不同 task_id 计数有界（复用 MAX_TASKS），
         # 并淘汰最旧条目；任务被淘汰时同步清理其日志映射。
-        source = STORE_JS.read_text()
+        source = STORE_JS.read_text(encoding="utf-8")
         self.assertIn('_evictTaskLogOverflow', source)
         self.assertIn('Object.keys(this._state.taskLogs)', source)
         self.assertIn('delete this._state.taskLogs[evicted]', source)
 
     def test_store_truncates_overlong_task_log_lines(self):
         # Fix 4：单条日志行写入前按 MAX_LOG_LINE_LENGTH 截断。
-        source = STORE_JS.read_text()
+        source = STORE_JS.read_text(encoding="utf-8")
         self.assertIn('MAX_LOG_LINE_LENGTH', source)
         self.assertIn('slice(0, MAX_LOG_LINE_LENGTH)', source)
 
@@ -1161,14 +1161,14 @@ class ViewBoundaryTests(unittest.TestCase):
     def test_views_use_dom_safe_writes_for_dynamic_text(self):
         for path in (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js',
                      FRONTEND_DIR / 'assets' / 'views' / 'machine.js'):
-            source = path.read_text()
+            source = path.read_text(encoding="utf-8")
             self.assertNotIn('insertAdjacentHTML', source, path)
             self.assertNotIn('innerHTML', source, path)
             self.assertIn('textContent', source, path)
 
     def test_views_export_mount_interfaces(self):
-        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text()
-        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text()
+        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text(encoding="utf-8")
+        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text(encoding="utf-8")
         self.assertIn('export function mountFleet(root, store, client)',
                       fleet)
         self.assertIn(
@@ -1176,8 +1176,8 @@ class ViewBoundaryTests(unittest.TestCase):
             machine)
 
     def test_views_use_injected_client_methods_only(self):
-        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text()
-        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text()
+        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text(encoding="utf-8")
+        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text(encoding="utf-8")
         # 不允许直接调用 HTTP 底层：fetch / EventSource / XMLHttpRequest
         for source in (fleet, machine):
             self.assertNotIn('fetch(', source)
@@ -1192,14 +1192,14 @@ class ViewBoundaryTests(unittest.TestCase):
             self.assertIn(token, machine)
 
     def test_views_subscribe_to_store(self):
-        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text()
-        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text()
+        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text(encoding="utf-8")
+        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text(encoding="utf-8")
         self.assertIn('store.subscribe', fleet)
         self.assertIn('store.subscribe', machine)
 
     def test_views_encode_page_navigation_with_page_path(self):
-        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text()
-        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text()
+        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text(encoding="utf-8")
+        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text(encoding="utf-8")
         # 机器导航必须用编码的 pagePath("machine", name)
         self.assertIn("pagePath('machine', name)", fleet)
         self.assertIn("import { pagePath } from '../routes.js'", fleet)
@@ -1211,13 +1211,13 @@ class ViewBoundaryTests(unittest.TestCase):
             self.assertIn('setAttribute', source)
 
     def test_fleet_dispatch_link_targets_create_form_anchor(self):
-        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text()
+        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text(encoding="utf-8")
         self.assertIn("pagePath('machine', name) + '#task-create-form'", fleet)
         self.assertIn('下发任务', fleet)
 
     def test_metric_bars_do_not_invent_four_core_load_percent(self):
-        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text()
-        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text()
+        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text(encoding="utf-8")
+        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text(encoding="utf-8")
         for source, name in ((fleet, 'fleet.js'), (machine, 'machine.js')):
             self.assertNotIn('/ 4', source, f'{name} must not treat load as 4-core %')
             self.assertNotIn('/4', source, f'{name} must not treat load as 4-core %')
@@ -1232,22 +1232,22 @@ class ViewBoundaryTests(unittest.TestCase):
         self.assertIn("appendMetricBar(host, '磁盘'", machine)
 
     def test_views_have_no_flask_bootstrap_or_path_handcoding(self):
-        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text()
-        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text()
+        fleet = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text(encoding="utf-8")
+        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text(encoding="utf-8")
         for source in (fleet, machine):
             self.assertNotIn('url_for', source)
             self.assertNotIn('window.FleetConfig', source)
             self.assertNotIn("'/api", source)
 
     def test_machine_form_uses_text_content_errors_and_validates_for_ux(self):
-        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text()
+        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text(encoding="utf-8")
         self.assertIn('errorBox.textContent', machine)
         self.assertIn('请输入项目名', machine)
         self.assertIn('请输入指令', machine)
         self.assertIn('createTask', machine)
 
     def test_machine_view_optional_session_deep_link_on_create(self):
-        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text()
+        machine = (FRONTEND_DIR / 'assets' / 'views' / 'machine.js').read_text(encoding="utf-8")
         self.assertIn("pagePath('session', task.session_id)", machine)
         self.assertIn("typeof task.session_id === 'string'", machine)
 
@@ -1275,7 +1275,7 @@ class Task15ReviewFixTests(unittest.TestCase):
     FLEET_JS = FRONTEND_DIR / 'assets' / 'views' / 'fleet.js'
 
     def test_machine_render_sources_live_store_tasks_not_only_stale_viewstate(self):
-        source = self.MACHINE_JS.read_text()
+        source = self.MACHINE_JS.read_text(encoding="utf-8")
         # render 必须读取 store 的任务模型并按当前机器过滤（live 增量来源）
         self.assertIn('mergedTaskList(', source)
         self.assertIn('store.getState()', source)
@@ -1290,7 +1290,7 @@ class Task15ReviewFixTests(unittest.TestCase):
         self.assertIn('MAX_VISIBLE_TASKS', source)
 
     def test_machine_reads_live_reachability_system_agents(self):
-        source = self.MACHINE_JS.read_text()
+        source = self.MACHINE_JS.read_text(encoding="utf-8")
         # machine_update 走 store：渲染层经 machineSnapshot 读取实时增量
         self.assertIn('machineSnapshot(store, machineName)', source)
         self.assertIn('summary.online', source)
@@ -1298,21 +1298,21 @@ class Task15ReviewFixTests(unittest.TestCase):
         self.assertIn('summary.system', source)
 
     def test_machine_does_not_render_from_stale_viewstate_snapshots(self):
-        source = self.MACHINE_JS.read_text()
+        source = self.MACHINE_JS.read_text(encoding="utf-8")
         # 旧实现把 system/agents 缓存进 viewState 一次性渲染；修复后从 store 读取
         self.assertNotIn('viewState.system', source)
         self.assertNotIn('viewState.agents', source)
 
     def test_index_html_has_single_terminal_refresh_owner(self):
-        source = (FRONTEND_DIR / 'assets/app.js').read_text()
+        source = (FRONTEND_DIR / 'assets/app.js').read_text(encoding="utf-8")
         self.assertEqual(source.count('new SseClient('), 1)
         self.assertIn('new SseClient(store, {client})', source)
         self.assertNotIn('store.setRefreshTaskHandler', source)
         self.assertNotIn('getRefreshTaskHandler', source)
 
     def test_both_views_render_before_async_requests(self):
-        machine = self.MACHINE_JS.read_text()
-        fleet = self.FLEET_JS.read_text()
+        machine = self.MACHINE_JS.read_text(encoding="utf-8")
+        fleet = self.FLEET_JS.read_text(encoding="utf-8")
         # 立即渲染（loading）必须发生在 mount 的异步请求链之前
         for source in (machine, fleet):
             marker = source.find('// 订阅后立即渲染一次')
@@ -1329,8 +1329,8 @@ class Task15ReviewFixTests(unittest.TestCase):
         self.assertIn('store.subscribe(onStoreChange)', machine)
 
     def test_views_fence_teardown_against_late_async_callbacks(self):
-        machine = self.MACHINE_JS.read_text()
-        fleet = self.FLEET_JS.read_text()
+        machine = self.MACHINE_JS.read_text(encoding="utf-8")
+        fleet = self.FLEET_JS.read_text(encoding="utf-8")
         for source in (machine, fleet):
             # disposed 标志在卸载时置位，render 首行即护栏
             self.assertIn('var disposed', source)
@@ -1358,7 +1358,7 @@ class Task66MachineClassAllowlistTests(unittest.TestCase):
     MACHINE_JS = FRONTEND_DIR / 'assets' / 'views' / 'machine.js'
 
     def test_task_state_classes_are_explicit_allowlist_mapping(self):
-        source = self.MACHINE_JS.read_text()
+        source = self.MACHINE_JS.read_text(encoding="utf-8")
         self.assertIn('TASK_STATE_CLASSES', source)
         for state, klass in (
             ('queued', 'st-queued'), ('leased', 'st-leased'),
@@ -1370,12 +1370,12 @@ class Task66MachineClassAllowlistTests(unittest.TestCase):
                           f'缺失状态映射 {state} -> {klass}')
 
     def test_task_state_class_has_safe_fallback(self):
-        source = self.MACHINE_JS.read_text()
+        source = self.MACHINE_JS.read_text(encoding="utf-8")
         self.assertIn('TASK_STATE_FALLBACK_CLASS', source)
         self.assertIn("'st-unknown'", source)
 
     def test_render_uses_allowlist_helper_not_raw_concatenation(self):
-        source = self.MACHINE_JS.read_text()
+        source = self.MACHINE_JS.read_text(encoding="utf-8")
         # 渲染路径必须经由白名单助手，把动态状态文本与 class 解耦
         self.assertIn('taskStateClass(stateText)', source)
         # 原始拼接（无论变量名 stateText / state / s）一律禁止
@@ -1384,7 +1384,7 @@ class Task66MachineClassAllowlistTests(unittest.TestCase):
         self.assertNotIn("st-' + ", source)
 
     def test_dynamic_state_text_remains_text_content_safe(self):
-        source = self.MACHINE_JS.read_text()
+        source = self.MACHINE_JS.read_text(encoding="utf-8")
         # class 由白名单给出；动态文本仍由 textContent 写入（h() 内部）
         self.assertIn('task-state ', source)
         self.assertIn('textContent', source)
@@ -1398,7 +1398,7 @@ class Task66SseReconnectSourceTests(unittest.TestCase):
     """
 
     def test_onerror_closes_failed_source_instead_of_relaying_on_autoreconnect(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         self.assertIn('_closeAndScheduleReconnect', source)
         self.assertIn('this._source.close()', source)
         # 失败源必须在 onerror 内被关闭并置空，才能禁用 EventSource 自带的
@@ -1407,7 +1407,7 @@ class Task66SseReconnectSourceTests(unittest.TestCase):
         self.assertIn('this._source = null', source)
 
     def test_reconnect_is_bounded_and_uses_latest_store_cursor(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         self.assertIn('RECONNECT_DELAY_MS', source)
         self.assertIn('_scheduleReconnect', source)
         self.assertIn('_doReconnect', source)
@@ -1416,7 +1416,7 @@ class Task66SseReconnectSourceTests(unittest.TestCase):
         self.assertIn('this.start()', source)
 
     def test_reconnect_total_is_bounded_by_max_reconnects(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         # 重连总次数有上限（与 MAX_POLLS 同量级的有界降级习惯）
         self.assertIn('export var MAX_RECONNECTS', source)
         self.assertIn('MAX_RECONNECTS = MAX_POLLS', source)
@@ -1425,7 +1425,7 @@ class Task66SseReconnectSourceTests(unittest.TestCase):
         self.assertIn('this._reconnectCount += 1', source)
 
     def test_reconnect_counter_resets_only_on_successful_open(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         # 计数仅由 onopen（成功建立连接）复位；onerror 只递增、绝不复位
         self.assertIn('self._reconnectCount = 0;', source)
         self.assertIn('self._cancelReconnect();', source)
@@ -1433,25 +1433,25 @@ class Task66SseReconnectSourceTests(unittest.TestCase):
         self.assertIn('this._reconnectCount = 0;', source)
 
     def test_reconnect_timer_is_singleton_and_cancelled_on_open_and_stop(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         self.assertIn('if (this._reconnectTimer)', source)
         self.assertIn('_cancelReconnect', source)
         # onopen 触发时取消未决重连；stop() 同样取消
         self.assertIn('self._cancelReconnect(); // 连接恢复', source)
 
     def test_explicit_start_cancels_pending_reconnect_timer(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         # 显式 start() 取代未决的孤儿重连计时器（防其后台再次触发重建）
         self.assertIn('this._cancelReconnect();', source)
         self.assertIn('// 显式 start() 取代任何未决的延迟重连', source)
 
     def test_stale_source_callbacks_are_noops(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         # onopen / onerror 都以 source 持有者比对作为前置护栏
         self.assertIn('if (self._source !== source)', source)
 
     def test_stop_cancels_pending_reconnect(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         self.assertIn('_cancelReconnect()', source)
         self.assertIn('clearTimeout', source)
 
@@ -1479,7 +1479,7 @@ class AgentTypesDynamicDropdownTests(unittest.TestCase):
         # executable=True 但无 default_command 的 family（或注册表已改名），
         # API 失败时下拉会渲染出永远 exit 127 的选项——此测试使其必然失败。
         from agent_profiles import EXECUTABLE_AGENT_TYPES
-        source = self.MACHINE_JS.read_text()
+        source = self.MACHINE_JS.read_text(encoding="utf-8")
         match = re.search(
             r'var FALLBACK_AGENT_TYPES\s*=\s*\[([^\]]*)\]', source)
         self.assertIsNotNone(match,
@@ -1491,7 +1491,7 @@ class AgentTypesDynamicDropdownTests(unittest.TestCase):
                          f"兜底清单混入注册表之外的 family: {sorted(unknown)}")
 
     def test_machine_dropdown_uses_fallback_then_api_overwrite(self):
-        source = self.MACHINE_JS.read_text()
+        source = self.MACHINE_JS.read_text(encoding="utf-8")
         # 内置兜底清单存在且含全部四个注册表 family（值 ⊆ EXECUTABLE_AGENT_TYPES）
         self.assertIn('FALLBACK_AGENT_TYPES', source)
         for family in ('codex', 'claude_code', 'hermes', 'pi', 'zcode'):
@@ -1503,7 +1503,7 @@ class AgentTypesDynamicDropdownTests(unittest.TestCase):
         self.assertIn('isActive() && Array.isArray(types)', source)
 
     def test_agent_types_request_shared_per_mount_not_per_render(self):
-        source = self.MACHINE_JS.read_text()
+        source = self.MACHINE_JS.read_text(encoding="utf-8")
         # 请求只在 mount 生命周期发起一次（agentTypesPromise 共享），
         # createTaskForm 签名消费 promise 而非 clientMethods.listAgentTypes
         self.assertIn('var agentTypesPromise', source)
@@ -1516,7 +1516,7 @@ class AgentTypesDynamicDropdownTests(unittest.TestCase):
         self.assertNotIn('listAgentTypes()', form_body)
 
     def test_client_owns_agent_types_path_and_parser(self):
-        source = self.CLIENT_JS.read_text()
+        source = self.CLIENT_JS.read_text(encoding="utf-8")
         # 路径唯一来源在 client 的 API map（字面量，便于 source 契约校验）
         self.assertIn("agentTypes: '/agent-types'", source)
         self.assertIn('export async function listAgentTypes(', source)
@@ -1524,18 +1524,18 @@ class AgentTypesDynamicDropdownTests(unittest.TestCase):
         self.assertIn('parseAgentTypes(await request(API.agentTypes))', source)
 
     def test_contracts_export_agent_types_parser(self):
-        source = CONTRACTS_JS.read_text()
+        source = CONTRACTS_JS.read_text(encoding="utf-8")
         self.assertIn('export function parseAgentTypes(', source)
 
     def test_shell_wires_list_agent_types_into_client(self):
-        source = (FRONTEND_DIR / 'assets/app.js').read_text()
+        source = (FRONTEND_DIR / 'assets/app.js').read_text(encoding="utf-8")
         self.assertIn("import * as api from './api/client.js'", source)
         self.assertIn('...api', source)
 
 
 class Task16ShellContractTests(unittest.TestCase):
     def test_entry_has_single_stream_and_external_views(self):
-        source = (FRONTEND_DIR / 'assets/app.js').read_text()
+        source = (FRONTEND_DIR / 'assets/app.js').read_text(encoding="utf-8")
         self.assertEqual(source.count('new SseClient('), 1)
         for name in ['mountFleet', 'mountMachine', 'mountTask', 'mountSession', 'mountAssistant', 'mountMonitoring']:
             self.assertIn(name, source)
@@ -1563,12 +1563,12 @@ class TaskViewBoundaryTests(unittest.TestCase):
     TASK_JS = FRONTEND_DIR / 'assets' / 'views' / 'task.js'
 
     def test_task_view_exports_mount_interface(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         self.assertIn('export function mountTask(root, taskId, store, client)',
                       source)
 
     def test_task_view_refreshes_via_client_not_reload_or_fetch(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         self.assertIn('getTask', source)
         self.assertNotIn('location.reload', source)
         self.assertNotIn('fetch(', source)
@@ -1576,7 +1576,7 @@ class TaskViewBoundaryTests(unittest.TestCase):
         self.assertNotIn('XMLHttpRequest', source)
 
     def test_task_view_uses_injected_client_methods(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         for token in ('clientMethods.getTask', 'clientMethods.cancelTask',
                       'clientMethods.retryTask', 'clientMethods.pauseTask',
                       'clientMethods.continueTask', 'clientMethods.confirmTask',
@@ -1584,14 +1584,14 @@ class TaskViewBoundaryTests(unittest.TestCase):
             self.assertIn(token, source, f'task.js missing {token}')
 
     def test_task_view_subscribes_to_store_for_logs_and_state(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         self.assertIn('store.subscribe', source)
         self.assertIn('store.getState()', source)
         self.assertIn('taskLogs', source)
         self.assertIn('store.setTask(res)', source)
 
     def test_task_view_uses_dom_safe_writes(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         for banned in ('innerHTML', 'insertAdjacentHTML', 'outerHTML',
                        'document.write'):
             self.assertNotIn(banned, source, f'task.js used {banned}')
@@ -1599,7 +1599,7 @@ class TaskViewBoundaryTests(unittest.TestCase):
             self.assertIn(required, source, f'task.js missing {required}')
 
     def test_task_view_has_visible_loading_error_empty_states(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         self.assertIn('加载中', source)
         self.assertIn('加载失败', source)
         self.assertIn('任务不存在或已过期', source)
@@ -1607,14 +1607,14 @@ class TaskViewBoundaryTests(unittest.TestCase):
         self.assertIn('暂无日志', source)
 
     def test_task_view_renders_instruction_stateflow_and_result(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         for token in ('指令', '状态', '结果', 'diff 摘要', '实时日志',
                       '测试摘要', '脱敏 patch', 'stateflow', 'state-node',
                       'diffstat'):
             self.assertIn(token, source, f'task.js missing {token}')
 
     def test_task_view_binds_actions_via_delegation_and_guards_inflight(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         self.assertIn('addEventListener', source)
         self.assertIn("data-action", source)
         self.assertIn('if (disposed || self.busy)', source)
@@ -1626,7 +1626,7 @@ class TaskViewBoundaryTests(unittest.TestCase):
         self.assertNotIn("btn.tagName !== 'BUTTON'", source)
 
     def test_task_view_fences_teardown_against_late_callbacks(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         self.assertIn('var disposed', source)
         self.assertIn('if (disposed) {', source)
         self.assertIn('disposed = true', source)
@@ -1635,32 +1635,32 @@ class TaskViewBoundaryTests(unittest.TestCase):
         self.assertIn('teardown.resume', source)
 
     def test_task_view_keeps_bounded_diff_and_log_output(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         self.assertIn('MAX_DIFF_RENDER', source)
         self.assertIn('MAX_LOG_RENDER', source)
         self.assertIn('slice(0, MAX_DIFF_RENDER)', source)
         self.assertIn('slice(-MAX_LOG_RENDER)', source)
 
     def test_task_view_never_renders_raw_internal_fields(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         for banned in ('attempt_id', 'nonce', 'client_token'):
             self.assertNotIn(banned, source, f'task.js referenced {banned}')
 
     def test_task_view_has_no_flask_bootstrap_or_path_handcoding(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         self.assertNotIn('url_for', source)
         self.assertNotIn('window.FleetConfig', source)
         self.assertNotIn("'/api", source)
         self.assertNotIn('${', source)
 
     def test_task_view_optional_session_deep_link(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         self.assertIn("import { pagePath } from '../routes.js'", source)
         self.assertIn("pagePath('session', task.session_id)", source)
         self.assertIn("typeof task.session_id === 'string'", source)
 
     def test_task_view_exposes_pause_continue_gate_and_diff_panel(self):
-        source = self.TASK_JS.read_text()
+        source = self.TASK_JS.read_text(encoding="utf-8")
         for token in ("data-action", "'pause'", "'continue'", "'confirm'",
                       "'reject'", 'PAUSABLE_STATES', "state === 'paused'",
                       'has_diff_patch', 'test_summary', 'getTaskDiff',
@@ -1713,25 +1713,25 @@ class FrontendCredentialBoundaryContractTests(unittest.TestCase):
 
     def test_entry_placeholder_leaks_no_credential_like_value(self):
         # README 红线：token、口令、凭据样例不进 git、不写文档。
-        source = INDEX_HTML.read_text()
+        source = INDEX_HTML.read_text(encoding="utf-8")
         for value in re.findall(r'placeholder="([^"]*)"', source):
             self.assertIsNone(re.search(r'\d{5,}', value),
                               f'placeholder 含长数字串: {value}')
 
     def test_client_does_not_persist_tokens_across_browser_sessions(self):
-        source = CLIENT_JS.read_text()
+        source = CLIENT_JS.read_text(encoding="utf-8")
         for banned in ('localStorage', 'fleet_access_token', 'getAccessToken'):
             self.assertNotIn(banned, source)
 
     def test_fleet_view_keys_auth_error_on_status_not_message_text(self):
         # 401 判定必须走结构化字段（ApiError.status），不得匹配错误文案
-        source = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text()
+        source = (FRONTEND_DIR / 'assets' / 'views' / 'fleet.js').read_text(encoding="utf-8")
         self.assertIn('.status === 401', source)
         self.assertNotIn('operator identity required', source)
         self.assertNotIn('openAuthModal', source)
 
     def test_routes_helper_has_no_dead_escape_attr(self):
-        source = ROUTES_JS.read_text()
+        source = ROUTES_JS.read_text(encoding="utf-8")
         self.assertNotIn('escapeAttr', source)
 
 

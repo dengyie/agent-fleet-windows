@@ -84,7 +84,7 @@ def test_workspace_timeout_reaps_process(tmp_path: Path, backend_type: type[Dire
     receipt = backend.execute("timeout-test", argv, timeout_s=0.5)
     assert receipt.error_code == "timeout"
     assert time.monotonic() - started < 3
-    pid = int((tmp_path / "child.pid").read_text())
+    pid = int((tmp_path / "child.pid").read_text(encoding="utf-8"))
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
 

@@ -106,7 +106,7 @@ class ReleaseLayoutTests(unittest.TestCase):
                          'assets/views/muse.js', 'assets/views/muse/cards.js',
                          'assets/api/muse.js',
                          'assets/styles/muse.css'):
-            source = (FRONTEND_DIR / relative).read_text()
+            source = (FRONTEND_DIR / relative).read_text(encoding="utf-8")
             for token in secret_hints:
                 self.assertNotIn(token, source, f'{relative} leaked {token}')
 
@@ -123,20 +123,20 @@ class PackageSafetyTests(unittest.TestCase):
     """
 
     def test_package_script_source_rejects_secret_and_state_paths(self):
-        source = Path("deploy/package-frontend-release.sh").read_text()
+        source = Path("deploy/package-frontend-release.sh").read_text(encoding="utf-8")
         for forbidden in ("credentials/", "state/", "runner-credential", "ingest-token"):
             self.assertIn(forbidden, source)
 
 class DeploymentSafetyTests(unittest.TestCase):
     def test_e2e_smoke_copies_report_schema_dependency(self):
-        source = (REPO_ROOT / "deploy" / "e2e-smoke.sh").read_text()
+        source = (REPO_ROOT / "deploy" / "e2e-smoke.sh").read_text(encoding="utf-8")
         self.assertIn(
             "cp -r hub tools connectors frontend agent_profiles.py report_schema.py session_schema.py platform_schema.py requirements.txt",
             source,
         )
 
     def test_container_install_has_legacy_migration_and_permission_preflight(self):
-        source = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text()
+        source = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text(encoding="utf-8")
         self.assertIn("allow_existing", source)
         self.assertIn("DEPLOY_PREFLIGHT_FAILED", source)
         self.assertIn("prepare_runtime_dir", source)
@@ -144,7 +144,7 @@ class DeploymentSafetyTests(unittest.TestCase):
         self.assertIn("import cryptography, flask, websocket, yaml", source)
 
     def test_container_install_preserves_runtime_credentials(self):
-        source = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text()
+        source = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text(encoding="utf-8")
         preserve_marker = 'fleet_preserve_runtime_tree "$live" "$release"'
         token_marker = 'install -m 600 "$token_source" "$release/credentials/ingest-token"'
         self.assertIn(preserve_marker, source)
@@ -152,13 +152,13 @@ class DeploymentSafetyTests(unittest.TestCase):
         self.assertIn('cleanup_token_source()', source)
         self.assertIn('source_real=$(readlink -f \"$token_source\"', source)
         self.assertIn('active_real=$(readlink -f \"$live/credentials/ingest-token\"', source)
-        adopt = (REPO_ROOT / "deploy" / "hk-container-adopt-release.sh").read_text()
+        adopt = (REPO_ROOT / "deploy" / "hk-container-adopt-release.sh").read_text(encoding="utf-8")
         self.assertIn(preserve_marker, adopt)
 
     def test_overlay_adopt_uses_rsync_free_runtime_preserving_helper(self):
-        helper = (REPO_ROOT / "deploy" / "hk-overlay-sync.sh").read_text()
-        adopt = (REPO_ROOT / "deploy" / "hk-container-adopt-release.sh").read_text()
-        install = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text()
+        helper = (REPO_ROOT / "deploy" / "hk-overlay-sync.sh").read_text(encoding="utf-8")
+        adopt = (REPO_ROOT / "deploy" / "hk-container-adopt-release.sh").read_text(encoding="utf-8")
+        install = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text(encoding="utf-8")
         self.assertIn('. "$here/hk-overlay-sync.sh"', adopt)
         self.assertIn('fleet_preserve_runtime_tree "$live" "$release"', adopt)
         self.assertIn('fleet_overlay_backup_tree "$live" "$backup"', adopt)
@@ -220,15 +220,15 @@ class DeploymentSafetyTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
 
     def test_guardian_and_probe_allow_existing_only_for_existing_process(self):
-        guardian = (REPO_ROOT / "hub" / "agent_fleet_guardian.py").read_text()
-        loop = (REPO_ROOT / "deploy" / "hk-self-report-loop.sh").read_text()
+        guardian = (REPO_ROOT / "hub" / "agent_fleet_guardian.py").read_text(encoding="utf-8")
+        loop = (REPO_ROOT / "deploy" / "hk-self-report-loop.sh").read_text(encoding="utf-8")
         self.assertIn('"web",\n                "allow_existing"', guardian)
         self.assertNotIn("os.kill(old_pid", guardian)
         self.assertIn('mode=${3:-api_only}', loop)
         self.assertIn('allow_existing', loop)
 
     def test_probe_failure_counters_are_safe_under_set_e(self):
-        loop = (REPO_ROOT / "deploy" / "hk-self-report-loop.sh").read_text()
+        loop = (REPO_ROOT / "deploy" / "hk-self-report-loop.sh").read_text(encoding="utf-8")
         # ``((counter++))`` returns status 1 when counter is initially zero;
         # with set -e that exits before the first recovery attempt.
         self.assertNotIn('((failure_count++))', loop)
@@ -237,7 +237,7 @@ class DeploymentSafetyTests(unittest.TestCase):
         self.assertIn('restart_failure_count=$((restart_failure_count + 1))', loop)
 
     def test_probe_process_identity_is_bounded_and_verified_after_start(self):
-        install = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text()
+        install = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text(encoding="utf-8")
         start = install.index('probe_process_matches()')
         end = install.index('\n}\n', start) + 3
         matcher = install[start:end]
@@ -251,7 +251,7 @@ class DeploymentSafetyTests(unittest.TestCase):
         self.assertIn('probe_process_matches "$probe_pid" "$target"', install)
 
     def test_probe_loop_is_singleton_and_pid_cleanup_is_owner_bound(self):
-        loop = (REPO_ROOT / "deploy" / "hk-self-report-loop.sh").read_text()
+        loop = (REPO_ROOT / "deploy" / "hk-self-report-loop.sh").read_text(encoding="utf-8")
         self.assertIn('lock_dir=${pid_file}.lock', loop)
         self.assertIn('lock_file=${lock_dir}/flock', loop)
         self.assertIn('exec {probe_lock_fd}>"$lock_file"', loop)
@@ -263,7 +263,7 @@ class DeploymentSafetyTests(unittest.TestCase):
         self.assertIn('interruptible_sleep "$health_check_interval"', loop)
 
     def test_adopt_release_matches_only_the_exact_hub_process(self):
-        adopt = (REPO_ROOT / "deploy" / "hk-container-adopt-release.sh").read_text()
+        adopt = (REPO_ROOT / "deploy" / "hk-container-adopt-release.sh").read_text(encoding="utf-8")
         start = adopt.index('pid=$(su')
         end = adopt.index('\" \"$FLEET_USER\")', start)
         matcher = adopt[start:end]
@@ -276,7 +276,7 @@ class DeploymentSafetyTests(unittest.TestCase):
     def test_package_script_source_has_no_build_or_network_chain(self):
         # The packaging contract forbids a Node/npm build chain, git clean, and
         # any external network or production endpoint. Assert absence in source.
-        source = (REPO_ROOT / 'deploy' / 'package-frontend-release.sh').read_text()
+        source = (REPO_ROOT / 'deploy' / 'package-frontend-release.sh').read_text(encoding="utf-8")
         for token in ('npm ', 'npm\nexec', 'webpack', 'git clean', 'vite', 'curl ',
                       'wget ', 'https://', 'agent.mangoqwq.com'):
             self.assertNotIn(token, source, f'打包脚本含禁止指令 {token}')
@@ -313,7 +313,7 @@ class DeploymentSafetyTests(unittest.TestCase):
             for rel in ('index.html', 'config.js', 'assets/api/client.js',
                         'assets/api/contracts.js', 'assets/realtime/sse.js', 'assets/state/store.js'):
                 self.assertIn(rel, copied, rel)
-            manifest = json.loads((out / 'manifest.json').read_text())
+            manifest = json.loads((out / 'manifest.json').read_text(encoding="utf-8"))
             self.assertEqual(manifest['version'], '2026-08-24.1')
             # file list = required frontend modules, in stable order, no extras.
             self.assertIn('index.html', manifest['files'])
@@ -385,7 +385,7 @@ class RoutingDocumentationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def _read(self, path):
-        return Path(path).read_text()
+        return Path(path).read_text(encoding="utf-8")
 
     def _block_after(self, source, marker):
         start = source.index(marker)
@@ -402,7 +402,7 @@ class RoutingDocumentationTests(unittest.TestCase):
 
     def test_sse_location_disables_buffering(self):
         # The brief-mandated routing documentation test.
-        source = Path("deploy/nginx-frontend-backend.example.conf").read_text()
+        source = Path("deploy/nginx-frontend-backend.example.conf").read_text(encoding="utf-8")
         self.assertIn("location = /api/stream", source)
         self.assertIn("proxy_buffering off", source)
         self.assertNotIn("Access-Control-Allow-Origin *", source)
@@ -421,7 +421,7 @@ class RoutingDocumentationTests(unittest.TestCase):
         self.assertIn('proxy_set_header X-Forwarded-Proto $scheme', source)
 
     def test_sse_location_keeps_buffering_off_and_long_read_timeout(self):
-        source = Path("deploy/nginx-frontend-backend.example.conf").read_text()
+        source = Path("deploy/nginx-frontend-backend.example.conf").read_text(encoding="utf-8")
         block = self._block_after(source, 'location = /api/stream')
         self.assertIn('proxy_buffering off', block)
         self.assertNotIn('proxy_buffering on', block)
@@ -438,12 +438,12 @@ class RoutingDocumentationTests(unittest.TestCase):
         self.assertNotIn('proxy_set_header', block)
 
     def test_example_config_has_no_wildcard_cors(self):
-        source = Path("deploy/nginx-frontend-backend.example.conf").read_text()
+        source = Path("deploy/nginx-frontend-backend.example.conf").read_text(encoding="utf-8")
         self.assertNotIn('Access-Control-Allow-Origin', source)
         self.assertNotIn('access-control-allow-origin', source.lower())
 
     def test_example_config_has_no_secrets(self):
-        source = Path("deploy/nginx-frontend-backend.example.conf").read_text()
+        source = Path("deploy/nginx-frontend-backend.example.conf").read_text(encoding="utf-8")
         for token in ('private key', 'ingest-token', 'runner-credential',
                       'token=', 'begin private key'):
             self.assertNotIn(token, source.lower())

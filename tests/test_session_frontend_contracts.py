@@ -275,7 +275,7 @@ class SessionFrontendModuleTests(unittest.TestCase):
         self.assertTrue(SESSION_JS.is_file(), 'frontend/assets/views/session.js missing')
 
     def test_session_view_exports_mount_session(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         self.assertIn('export function mountSession(root, sessionId, store, client, routeSequence)',
                       source)
         self.assertIn('function teardown()', source)
@@ -284,13 +284,13 @@ class SessionFrontendModuleTests(unittest.TestCase):
         self.assertIn('disposed', source)
 
     def test_session_view_has_explicit_states(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         for token in ('加载中', '加载失败', '暂无事件', '暂无策略信号',
                       '会话不存在或已过期', '无控制记录'):
             self.assertIn(token, source, f'缺 visible state text {token}')
 
     def test_session_view_dom_safe_writes(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         for banned in ('innerHTML', 'insertAdjacentHTML', 'outerHTML',
                        'document.write'):
             self.assertNotIn(banned, source, f'session.js used {banned}')
@@ -298,13 +298,13 @@ class SessionFrontendModuleTests(unittest.TestCase):
             self.assertIn(required, source, f'session.js missing {required}')
 
     def test_session_view_no_direct_http_or_stream(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         for banned in ('fetch(', 'EventSource', 'XMLHttpRequest',
                        'location.reload'):
             self.assertNotIn(banned, source, f'session.js used {banned}')
 
     def test_session_view_uses_injected_client_methods_only(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         for token in ('clientMethods.getSession', 'clientMethods.getSessionEvents',
                       'clientMethods.getSessionSignals'):
             self.assertIn(token, source, f'session.js missing {token}')
@@ -314,19 +314,19 @@ class SessionFrontendModuleTests(unittest.TestCase):
         self.assertNotIn("'/api", source)
 
     def test_session_summary_refresh_retries_after_inflight_update(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         self.assertIn('summaryRefreshPending', source)
         self.assertIn('summaryRefreshPending = true', source)
         self.assertIn('summaryRefreshPending = false', source)
         self.assertIn('refreshFromSummary();', source)
 
     def test_session_views_navigation_encoded_with_page_path(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         self.assertIn("import { pagePath } from '../routes.js'", source)
         self.assertIn('setAttribute(\'href\',', source)
 
     def test_session_view_never_renders_raw_internal_fields(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         # 视图不得把 raw token / nonce / secret 值当作可见文本渲染；惟一的
         # 可见 attempt_id 是受管会话的公开 opaque 标识，已由契约校验。
         for banned in ('nonce', 'client_token'):
@@ -335,7 +335,7 @@ class SessionFrontendModuleTests(unittest.TestCase):
         self.assertNotIn('SELECT ', source)
 
     def test_session_view_gap_and_control_state_render_allowlisted(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         # capture_gap 必须被专属渲染（缺口即降级），而不是默默吞掉。
         self.assertIn('gap', source)
         # 控制队列状态必须显式渲染文本（queued/成功等），不能直接拼状态名。
@@ -350,7 +350,7 @@ class SessionFrontendModuleTests(unittest.TestCase):
         self.assertNotIn("ct-' + ", source)
 
     def test_session_view_maps_tool_status_from_schema_vocabulary(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         # 禁止把非 error/failed 的 tool_result（completed/ok/timeout/未知码）默认成 Success。
         self.assertNotIn(
             "(p.status === 'error' || p.status === 'failed') ? 'error' : 'success'",
@@ -363,20 +363,20 @@ class SessionFrontendModuleTests(unittest.TestCase):
         self.assertNotIn('function commonHead', source)
 
     def test_session_view_optional_task_deep_link(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         self.assertIn('firstBoundTaskId', source)
         self.assertIn("pagePath('task', boundTaskId)", source)
         self.assertIn("payload.task_id", source)
 
     def test_session_view_bounds_rendering(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         for token in ('MAX_EVENT_RENDER', 'MAX_SIGNAL_RENDER',
                       'MAX_TEXT_RENDER'):
             self.assertIn(token, source, f'session.js missing {token}')
         self.assertIn('slice(', source)
 
     def test_session_contracts_exports_session_parsers(self):
-        source = CONTRACTS_JS.read_text()
+        source = CONTRACTS_JS.read_text(encoding="utf-8")
         for fn in ('parseSession', 'parseSessionList', 'parseSessionEvents',
                    'parseSessionSignals', 'parseControlReceipts',
                    'parseAdoption', 'parseAdoptionList', 'parseControlEnqueue'):
@@ -384,7 +384,7 @@ class SessionFrontendModuleTests(unittest.TestCase):
                           f'contracts missing {fn}')
 
     def test_session_contracts_contains_session_allowlists(self):
-        source = CONTRACTS_JS.read_text()
+        source = CONTRACTS_JS.read_text(encoding="utf-8")
         for token in ('SESSION_FIELDS', 'SESSION_EVENT_FIELDS',
                       'SESSION_SIGNAL_FIELDS', 'CONTROL_RECEIPT_FIELDS',
                       'SSE_SESSION_SUMMARY_FIELDS', 'EVENT_PAYLOAD_FIELDS'):
@@ -394,15 +394,15 @@ class SessionFrontendModuleTests(unittest.TestCase):
         self.assertIn('client_token', source)
 
     def test_session_contracts_sse_summary_is_allowlisted(self):
-        source = CONTRACTS_JS.read_text()
+        source = CONTRACTS_JS.read_text(encoding="utf-8")
         for token in ("name === 'session_update'",
                       "name === 'session_summary'"):
             self.assertIn(token, source, f'contracts missing {token}')
         self.assertIn('cursor', source)
-        self.assertNotIn('snapshot', SESSION_JS.read_text())
+        self.assertNotIn('snapshot', SESSION_JS.read_text(encoding="utf-8"))
 
     def test_session_client_surface_has_session_getters(self):
-        source = CLIENT_JS.read_text()
+        source = CLIENT_JS.read_text(encoding="utf-8")
         for fn in ('getSession', 'getSessionEvents', 'getSessionSignals',
                    'listSessions', 'listAdoptions', 'adoptInstance',
                    'revokeAdoption', 'retryAdoption', 'controlSession'):
@@ -412,7 +412,7 @@ class SessionFrontendModuleTests(unittest.TestCase):
         self.assertIn("'/source/control'", source)
 
     def test_session_view_wires_five_actions_without_stdin(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         self.assertIn('renderSourceControl', source)
         self.assertIn('controlSession', source)
         self.assertIn('pause_session', source)
@@ -430,7 +430,7 @@ class SessionFrontendModuleTests(unittest.TestCase):
         self.assertIn('box.value = viewState.followUpText', source)
 
     def test_sse_accepts_session_update_summary_but_not_other_events(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         # 新事件类型到 parse + store 的唯一路径；未改现有事件名。
         self.assertIn('session_update', source)
         self.assertIn('session_summary', source)
@@ -441,19 +441,19 @@ class SessionFrontendModuleTests(unittest.TestCase):
         self.assertIn("'fleet_event'", source)
 
     def test_sse_summary_only_allowlisted_fields_flow_to_view(self):
-        source = SSE_JS.read_text()
+        source = SSE_JS.read_text(encoding="utf-8")
         # 概要只包含公开摘要字段，绝不透传原始 transcript/token。
         for token in ('cursor', 'sequence'):
             self.assertIn(token, source, f'sse.js missing {token}')
 
     def test_index_html_mounts_session_route(self):
-        source = (FRONTEND_DIR / 'assets/app.js').read_text()
-        navigation = (FRONTEND_DIR / 'assets/shell/navigation.js').read_text()
+        source = (FRONTEND_DIR / 'assets/app.js').read_text(encoding="utf-8")
+        navigation = (FRONTEND_DIR / 'assets/shell/navigation.js').read_text(encoding="utf-8")
         self.assertIn('mountSession', source)
         self.assertIn("'session'", navigation)
 
     def test_session_view_has_no_embedded_snapshot_or_business_data(self):
-        source = SESSION_JS.read_text()
+        source = SESSION_JS.read_text(encoding="utf-8")
         # 视图是纯 JS 模块：不内嵌任何来自后端/上传的原始文本或快照常量。
         self.assertNotIn('snapshot', source)
         self.assertNotIn('${', source)
