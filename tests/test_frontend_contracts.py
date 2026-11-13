@@ -46,6 +46,7 @@ import hashlib
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -61,9 +62,10 @@ STORE_JS = FRONTEND_DIR / 'assets' / 'state' / 'store.js'
 
 
 # Node-only fixture runner for the pure contract parsers.  Contracts are pure
-# ES modules with no browser globals, so a single `node --input-type=module`
-# invocation can import them from a file URL and assert against synthetic,
-# non-secret payloads.  The Python test skips these when Node is unavailable.
+# ES modules with no browser globals, so a single `node` invocation can import
+# them from a file URL and assert against synthetic, non-secret payloads.  The
+# Python test skips these when Node is unavailable.  Runner 写入临时文件执行：
+# Windows CreateProcess 命令行上限 32767 字符，-e 内联 34KB 必炸 WinError 206。
 NODE_FIXTURE_RUNNER = r"""
 const contracts = await import(process.env.FLEET_CONTRACTS_URL);
 const fixture = process.env.FLEET_FIXTURE;
@@ -941,13 +943,27 @@ class ApiClientContractFixtureTests(unittest.TestCase):
         env['FLEET_CONTRACTS_URL'] = CONTRACTS_JS.resolve().as_uri()
         env['FLEET_FIXTURE'] = fixture_name
         proc = subprocess.run(
-            [self.NODE, '--input-type=module', '-e', NODE_FIXTURE_RUNNER],
-            capture_output=True, text=True, env=env, timeout=30,
+            self._node_argv(), capture_output=True, text=True, env=env,
+            timeout=30,
         )
         if proc.returncode != 0:
             self.fail(
                 f'fixture {fixture_name} failed:\nSTDOUT:\n{proc.stdout}\n'
                 f'STDERR:\n{proc.stderr}')
+
+    @staticmethod
+    def _node_argv():
+        # -e 内联 34KB 超过 Windows 32767 字符命令行上限（WinError 206）；
+        # 写临时 .mjs 由 node 从文件执行，ESM 语义由 .mjs 后缀保留。
+        runner = tempfile.NamedTemporaryFile(
+            'w', suffix='.mjs', encoding='utf-8', delete=False)
+        try:
+            runner.write(NODE_FIXTURE_RUNNER)
+            runner.close()
+            return [ApiClientContractFixtureTests.NODE, str(runner.name)]
+        except BaseException:
+            os.unlink(runner.name)
+            raise
 
 
 class SseBoundaryTests(unittest.TestCase):
@@ -1140,13 +1156,26 @@ class SseBoundaryFixtureTests(unittest.TestCase):
         env['FLEET_SSE_URL'] = SSE_JS.resolve().as_uri()
         env['FLEET_FIXTURE'] = fixture_name
         proc = subprocess.run(
-            [self.NODE, '--input-type=module', '-e', NODE_FIXTURE_RUNNER],
-            capture_output=True, text=True, env=env, timeout=30,
+            self._node_argv(), capture_output=True, text=True, env=env,
+            timeout=30,
         )
         if proc.returncode != 0:
             self.fail(
                 f'fixture {fixture_name} failed:\nSTDOUT:\n{proc.stdout}\n'
                 f'STDERR:\n{proc.stderr}')
+
+    @staticmethod
+    def _node_argv():
+        # 同上：-e 内联超 Windows 命令行上限，写临时 .mjs 执行。
+        runner = tempfile.NamedTemporaryFile(
+            'w', suffix='.mjs', encoding='utf-8', delete=False)
+        try:
+            runner.write(NODE_FIXTURE_RUNNER)
+            runner.close()
+            return [SseBoundaryFixtureTests.NODE, str(runner.name)]
+        except BaseException:
+            os.unlink(runner.name)
+            raise
 
 
 class ViewBoundaryTests(unittest.TestCase):

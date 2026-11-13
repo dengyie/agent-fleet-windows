@@ -84,6 +84,13 @@ class SandboxBackend(DirectoryBackend):
         home.mkdir(exist_ok=True)
         tmp.mkdir(exist_ok=True)
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home), "TMPDIR": str(tmp)}
+        if os.name == "nt":
+            # 与 DirectoryBackend._child_env 同理：缺 SystemRoot 的严格
+            # runner 上子进程直接退出码 1。
+            for key in ("SystemRoot", "SYSTEMROOT", "windir"):
+                value = os.environ.get(key)
+                if value:
+                    env[key] = value
         try:
             proc = run_bounded(command, cwd=self.root, env=env,
                                timeout_s=max(0.1, min(timeout_s, self.policy.timeout_seconds)),

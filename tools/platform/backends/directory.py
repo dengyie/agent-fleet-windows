@@ -46,6 +46,19 @@ class DirectoryBackend:
     def _receipt(self, command_id, state, result=None, error_code=None, truncated=False):
         return ToolReceipt(command_id, state, result or {}, error_code, truncated)
 
+    @staticmethod
+    def _child_env():
+        # 白名单 PATH 之外，nt 上必须保留 SystemRoot/TEMP/TMP：Windows 子进程
+        # （含 python.exe 初始化、CRT 临时文件）缺 SystemRoot 直接退出码 1，
+        # 这在严格 runner（hostedtoolcache）上必现，宽松环境不易复现。
+        env = {"PATH": os.environ.get("PATH", "")}
+        if os.name == "nt":
+            for key in ("SystemRoot", "SYSTEMROOT", "windir", "TEMP", "TMP"):
+                value = os.environ.get(key)
+                if value:
+                    env[key] = value
+        return env
+
     def list(self, relative_path: str = ""):
         try:
             path = self._path(relative_path)
@@ -127,7 +140,7 @@ class DirectoryBackend:
         try:
             proc = run_bounded(argv, cwd=self.root, timeout_s=max(0.1, min(float(timeout_s), 300.0)),
                                stdout_limit=MAX_OUTPUT_BYTES + 1, stderr_limit=MAX_OUTPUT_BYTES + 1,
-                               env={"PATH": os.environ.get("PATH", "")})
+                               env=self._child_env())
             raw = proc.stdout + proc.stderr
             output, truncated = decode_prefix(raw, MAX_OUTPUT_BYTES)
             return self._receipt(command_id, "succeeded" if proc.returncode == 0 else "failed", {"returncode": proc.returncode, "output": output}, error_code=None if proc.returncode == 0 else "process_failed", truncated=truncated)
