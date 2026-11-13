@@ -43,6 +43,39 @@ def test_git_diff_marker_is_inside_utf8_budget(repository: Path, kind: str) -> N
 
 
 def fake_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, script: str) -> None:
+    """Install a stand-in ``git`` whose non-``add`` invocations run script.
+
+    Windows ``CreateProcess`` only resolves ``git.exe`` — a shebang script or
+    ``git.bat`` on PATH is invisible to the product's ``["git", ...]`` argv —
+    so there we swap the binary via monkeypatched spawn sites instead of PATH.
+    """
+    if os.name == "nt":
+        script_file = tmp_path / "_fake_git.py"
+        script_file.write_text(
+            "import os, sys, time\n"
+            "if sys.argv[1] == 'add':\n    sys.exit(0)\n" + script)
+        real_popen, real_run = subprocess.Popen, subprocess.run
+
+        def swap(argv, *args, **kwargs):
+            if argv and argv[0] == "git":
+                argv = [sys.executable, str(script_file), *argv[1:]]
+            if argv and argv[0] == sys.executable:
+                # _git() passes capture_output/text; keep those semantics.
+                if "creationflags" not in kwargs:
+                    kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                return real_popen(argv, *args, **kwargs)
+            return real_popen(argv, *args, **kwargs)
+
+        def swap_run(argv, *args, **kwargs):
+            if argv and argv[0] == "git":
+                argv = [sys.executable, str(script_file), *argv[1:]]
+            return real_run(argv, *args, **kwargs)
+
+        monkeypatch.setattr(worktree.subprocess, "Popen", swap)
+        monkeypatch.setattr(worktree.subprocess, "run", swap_run)
+        monkeypatch.setattr("tools.bounded_process.subprocess.Popen", swap)
+        monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
+        return
     binary = tmp_path / "git"
     binary.write_text(f"#!{sys.executable}\nimport os, sys, time\n"
                       "if sys.argv[1] == 'add':\n    sys.exit(0)\n" + script)
@@ -81,8 +114,17 @@ def test_diff_deadline_reaps_child_and_retains_cause(tmp_path: Path, monkeypatch
     assert time.monotonic() - started < 3
     assert isinstance(error.value.__cause__, subprocess.TimeoutExpired)
     pid = int((tmp_path / "child.pid").read_text())
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    if os.name == "nt":
+        # os.kill(pid, 0) 在 Windows 是 TerminateProcess 语义（winerror 87），
+        # 不是存活探针；等价验证：SYNCHRONIZE 句柄立即等待即返回已终止。
+        import ctypes
+        handle = ctypes.windll.kernel32.OpenProcess(0x00100000, False, pid)
+        assert not handle or ctypes.windll.kernel32.WaitForSingleObject(handle, 0) == 0
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    else:
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
 
 
 def test_invalid_utf8_diff_is_bounded_valid_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

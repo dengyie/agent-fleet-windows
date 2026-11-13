@@ -16,7 +16,10 @@ def execution(tmp_path: Path, backend_type: type[DirectoryBackend], source: str)
     script.write_text(source)
     if backend_type is SandboxBackend:
         return SandboxBackend(tmp_path, launcher=[sys.executable, str(script)]), ["ls"]
-    return DirectoryBackend(tmp_path), ["python3", str(script)]
+    # Windows 上的 python3 常是 bash shim/WindowsApps stub，exec 链会把
+    # 启动警告混进 stderr；可执行名按平台给真实解释器。
+    executable = sys.executable if os.name == "nt" else "python3"
+    return DirectoryBackend(tmp_path), [executable, str(script)]
 
 
 def test_workspace_large_read_has_bounded_memory(tmp_path: Path) -> None:
@@ -85,8 +88,17 @@ def test_workspace_timeout_reaps_process(tmp_path: Path, backend_type: type[Dire
     assert receipt.error_code == "timeout"
     assert time.monotonic() - started < 3
     pid = int((tmp_path / "child.pid").read_text(encoding="utf-8"))
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    if os.name == "nt":
+        # os.kill(pid, 0) 在 Windows 走 TerminateProcess 路径（winerror 87），
+        # 不是 POSIX 的存活探针；等价验证：OpenProcess + 0 等待已终止。
+        import ctypes
+        handle = ctypes.windll.kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        assert not handle or ctypes.windll.kernel32.WaitForSingleObject(handle, 0) == 0
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    else:
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
 
 
 @pytest.mark.parametrize("kind", ["read", "directory-exec", "sandbox-exec"])

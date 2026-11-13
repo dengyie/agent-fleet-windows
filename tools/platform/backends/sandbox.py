@@ -70,6 +70,12 @@ class SandboxBackend(DirectoryBackend):
         if not math.isfinite(timeout_s) or timeout_s <= 0:
             return self._receipt(command_id, "failed", error_code="invalid_timeout")
         executable = Path(argv[0]).name
+        if os.name == "nt":
+            # Windows 可执行名带 .exe 且大小写不敏感；白名单是 POSIX 名，
+            # 不归一化则 Windows 节点永远 command_not_allowed。
+            executable = executable.lower()
+            if executable.endswith(".exe"):
+                executable = executable[:-4]
         if executable not in ALLOWED_EXECUTABLES or any(arg in {"-c", "--command"} for arg in argv[1:]):
             return self._receipt(command_id, "failed", error_code="command_not_allowed")
         command = [*self.launcher, *argv]
