@@ -92,8 +92,10 @@ def test_encrypted_owner_scoped_login_and_disconnect(services):
     assert not service.status('owner')['connected']
     service.import_login('owner', LOGIN)
     assert b'fixture-secret' not in repo.path.read_bytes()
-    assert repo.path.stat().st_mode & 0o777 == 0o600
-    assert (repo.directory/'credentials.key').stat().st_mode & 0o777 == 0o600
+    # POSIX 位在 nt 上是噪声（恒 0o666），属主语义由 NTFS ACL 承接。
+    if os.name != 'nt':
+        assert repo.path.stat().st_mode & 0o777 == 0o600
+        assert (repo.directory/'credentials.key').stat().st_mode & 0o777 == 0o600
     assert 'fixture-secret' not in json.dumps(service.status('owner'))
     assert not service.status('another')['connected']
     with pytest.raises(MuseError): service.sessions('another')

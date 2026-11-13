@@ -39,7 +39,9 @@ class MuseRepository:
         with self._init_lock:
             if self._cipher is None:
                 self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-                if self.directory.is_symlink() or self.directory.stat().st_mode & 0o077:
+                # Windows 的 st_mode 恒 0o666/0o444，POSIX 位是噪声；属主与
+                # 访问控制由 NTFS ACL 承接（用户 profile 下默认仅所有者）。
+                if os.name != 'nt' and (self.directory.is_symlink() or self.directory.stat().st_mode & 0o077):
                     raise MuseError('muse_private_store', 'Muse 状态目录必须仅当前用户可访问（0700）。', 503)
                 key_path = self.directory / 'credentials.key'
                 if not key_path.exists():
@@ -58,7 +60,7 @@ class MuseRepository:
                             pass
                     finally:
                         os.unlink(staging)
-                if key_path.is_symlink() or key_path.stat().st_mode & 0o077:
+                if os.name != 'nt' and key_path.stat().st_mode & 0o077:
                     raise MuseError('muse_private_store', 'Muse 密钥文件权限不正确。', 503)
                 if self.path.is_symlink():
                     raise MuseError('muse_private_store', 'Muse 数据库路径不正确。', 503)
