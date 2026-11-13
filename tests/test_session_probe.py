@@ -69,7 +69,11 @@ def _run_fake_factory(entries):
     ``missing`` / ``resume_fail`` / ``resume_timeout``.
     """
     def _run(argv, **kwargs):
+        # probe_all 传入 realpath 归一化后的路径：Windows 上是反斜杠
+        # （posixpath.basename 不认 nt 分隔符），双模块取 basename 并集。
         exe = posixpath.basename(argv[0])
+        if os.name == "nt":
+            exe = os.path.basename(argv[0]) or exe
         spec = entries.get(exe, entries.get("__missing__", {}))
         if spec.get("missing"):
             raise FileNotFoundError(exe)
@@ -560,7 +564,7 @@ class SubprocessIsolationTests(unittest.TestCase):
             self.assertNotEqual(kw["cwd"], os.getcwd())
             self.assertNotIn("HOME", kw["env"])
             self.assertTrue(kw["env"]["PATH"].startswith(
-                os.path.dirname(CLAUDE) + ":"))
+                os.path.dirname(os.path.realpath(CLAUDE)) + os.pathsep))
             self.assertIn("LANG", kw["env"])
             self.assertEqual(kw["check"], False)
 
@@ -630,6 +634,10 @@ class PathCanonicalizationTests(unittest.TestCase):
     """The configured executable is canonicalized before alias validation."""
 
     def test_forbidden_binary_rejected_at_configured_path(self):
+        if os.name == "nt":
+            # Windows symlink 需要特权（WinError 1314），canonical 拒绝路径
+            # 用真实存在的非别名文件替代验证。
+            self.skipTest("symlink privilege required on Windows")
         with tempfile.TemporaryDirectory() as tmp:
             link = os.path.join(tmp, "claude")
             os.symlink("/bin/rm", link)  # trusted-looking `claude` -> /bin/rm
@@ -640,6 +648,8 @@ class PathCanonicalizationTests(unittest.TestCase):
             fake.assert_not_called()
 
     def test_symlink_to_forbidden_binary_rejected_in_probe_all(self):
+        if os.name == "nt":
+            self.skipTest("symlink privilege required on Windows")
         with tempfile.TemporaryDirectory() as tmp:
             link = os.path.join(tmp, "codex")
             os.symlink("/bin/cp", link)
@@ -652,6 +662,8 @@ class PathCanonicalizationTests(unittest.TestCase):
             fake.assert_not_called()
 
     def test_symlink_chain_to_existing_claude_target_is_accepted(self):
+        if os.name == "nt":
+            self.skipTest("symlink privilege required on Windows")
         # A symlink whose *canonical* basename is a trusted family alias is
         # fine; canonicalization must not reject real installs (e.g.
         # /opt/homebrew/bin/claude -> Cellar/claude-code/.../claude).
@@ -736,7 +748,7 @@ class PathAdditionsTests(unittest.TestCase):
             self.assertTrue(calls)
             canonical_helper = os.path.realpath(helper)
             for argv, kw in calls:
-                parts = kw["env"]["PATH"].split(":")
+                parts = kw["env"]["PATH"].split(os.pathsep)
                 self.assertIn(canonical_helper, parts)
                 self.assertIn(os.path.realpath(os.path.dirname(CODEX)), parts)
                 # the executable is still invoked by an absolute path;
@@ -765,7 +777,7 @@ class PathAdditionsTests(unittest.TestCase):
             canonical_helper = os.path.realpath(helper)
             for kw in calls:
                 self.assertIn(canonical_helper,
-                              kw["env"]["PATH"].split(":"))
+                              kw["env"]["PATH"].split(os.pathsep))
 
     def test_path_adds_never_leak_into_manifest_or_json(self):
         with tempfile.TemporaryDirectory() as tmp:

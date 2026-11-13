@@ -64,8 +64,12 @@ MAX_DIAGNOSTICS = 12
 MAX_PROBE_READ = 65536
 
 # Minimal neutral PATH used when the *probed CLI itself* spawns a helper.  The
-# probe never resolves the probed executable through PATH.
-_PROBE_SYSTEM_PATH = ":".join(("/usr/local/bin", "/usr/bin", "/bin"))
+# probe never resolves the probed executable through PATH.  POSIX 系统目录在
+# nt 上没有意义，但保留条目无害；分隔符必须是 os.pathsep（nt 上 ': ' 是
+# 非法 PATH，'E:\x:C:\y' 会被解析成卷相对路径）。
+_PROBE_SYSTEM_PATH = os.pathsep.join(
+    ("/usr/local/bin", "/usr/bin", "/bin") if os.name != "nt"
+    else (r"C:\Windows\System32", r"C:\Windows"))
 
 # Bounds for the optional local PATH-additions config.
 MAX_PATH_ADDITIONS = 4
@@ -265,7 +269,7 @@ def _env_for(exe_path: str, path_adds: Sequence[str] = ()) -> dict[str, str]:
         parts.append(exe_dir)
     parts.extend(path_adds)
     parts.append(_PROBE_SYSTEM_PATH)
-    env["PATH"] = ":".join(parts)
+    env["PATH"] = os.pathsep.join(parts)
     return env
 
 
