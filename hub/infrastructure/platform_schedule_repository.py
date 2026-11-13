@@ -87,6 +87,10 @@ def _safe_rollback(conn) -> None:
 def _validate_timezone(value: Any) -> str:
     if not isinstance(value, str) or not value or len(value) > 64:
         raise PlatformScheduleRepositoryError("invalid_timezone")
+    if value == "UTC":
+        # UTC 不依赖 IANA 库：Windows 裸 Python（无 tzdata 包）没有
+        # zoneinfo 数据库，默认值不能因此整体失效。
+        return value
     try:
         ZoneInfo(value)
     except (ZoneInfoNotFoundError, ValueError):
