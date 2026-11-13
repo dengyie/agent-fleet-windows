@@ -31,6 +31,21 @@ def _patch_open(fake):
         lambda _self, _opener, req, timeout: fake(req, timeout))
 
 
+def _patch_home(fake_home):
+    """把 home 指向 fake_home。nt 上 ``Path.expanduser`` 只认
+    USERPROFILE / HOMEDRIVE+HOMEPATH（HOME 是 POSIX 惯例），三者都要
+    指向 fake_home，否则 tilde 会展开进真实用户目录。"""
+    overrides = {"HOME": str(fake_home)}
+    if os.name == "nt":
+        drive, tail = os.path.splitdrive(str(fake_home))
+        overrides.update({
+            "USERPROFILE": str(fake_home),
+            "HOMEDRIVE": drive,
+            "HOMEPATH": tail,
+        })
+    return mock.patch.dict(os.environ, overrides)
+
+
 def load_agent_runner():
     path = Path(__file__).resolve().parents[1] / "tools" / "agent-runner.py"
     spec = importlib.util.spec_from_file_location("agent_runner", path)
@@ -121,7 +136,7 @@ class RunnerConfigTests(unittest.TestCase):
         cred = cred_dir / "runner-credential"
         cred.write_text("tilde-secret\n")
         path = self._write(credential_file="~/.config/agent-fleet/runner-credential")
-        with mock.patch.dict(os.environ, {"HOME": str(fake_home)}):
+        with _patch_home(fake_home):
             with mock.patch.object(Path, "home", return_value=fake_home):
                 cfg = runner_config.load_config(path)
         self.assertEqual(cfg.credential, "tilde-secret")
@@ -132,7 +147,7 @@ class RunnerConfigTests(unittest.TestCase):
         proj = fake_home / "work" / "proj"
         proj.mkdir(parents=True)
         path = self._write(projects={"p": {"path": "~/work/proj"}})
-        with mock.patch.dict(os.environ, {"HOME": str(fake_home)}):
+        with _patch_home(fake_home):
             with mock.patch.object(Path, "home", return_value=fake_home):
                 cfg = runner_config.load_config(path)
         self.assertEqual(cfg.projects["p"], proj)
@@ -143,7 +158,7 @@ class RunnerConfigTests(unittest.TestCase):
         cache = fake_home / ".cache" / "agent-fleet"
         cache.mkdir(parents=True)
         path = self._write(cache_dir="~/.cache/agent-fleet")
-        with mock.patch.dict(os.environ, {"HOME": str(fake_home)}):
+        with _patch_home(fake_home):
             with mock.patch.object(Path, "home", return_value=fake_home):
                 cfg = runner_config.load_config(path)
         self.assertEqual(cfg.cache_dir, cache)

@@ -19,6 +19,12 @@ SPEC = importlib.util.spec_from_file_location("hk_web_process_control", HELPER_P
 CONTROL = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CONTROL)
 
+# nt 缺 select.poll/POLLIN 与 os.geteuid（POSIX 专属）。mock 到 Linux 的用例
+# 在测试启动时解析这些属性、产品代码（expected_uid 默认 os.geteuid()）也在
+# 运行时引用 → 逐例补 create=True 的 patch；POLLIN 在 Linux 上本就是 1，
+# 用 new=1 补齐对两平台语义一致。
+_SIGKILL = getattr(signal, "SIGKILL", 9)
+
 
 class GuardianProcessControlTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "linux", "requires Linux pidfd and /proc")
@@ -110,10 +116,11 @@ class GuardianProcessControlTests(unittest.TestCase):
 
     @mock.patch.object(CONTROL, "_read_process_identity")
     @mock.patch.object(CONTROL.os, "close")
+    @mock.patch.object(CONTROL.os, "geteuid", create=True, return_value=1000)
     @mock.patch.object(CONTROL.signal, "pidfd_send_signal", create=True)
     @mock.patch.object(CONTROL.os, "pidfd_open", create=True)
     def test_pid_reuse_after_pidfd_open_never_signals_the_replacement(
-        self, pidfd_open, send_signal, close_pidfd, read_identity
+        self, pidfd_open, send_signal, _geteuid, close_pidfd, read_identity
     ):
         pidfd_open.return_value = 73
         read_identity.return_value = (
@@ -133,11 +140,14 @@ class GuardianProcessControlTests(unittest.TestCase):
 
     @mock.patch.object(CONTROL, "_read_process_identity")
     @mock.patch.object(CONTROL.os, "close")
-    @mock.patch.object(CONTROL.select, "poll")
+    @mock.patch.object(CONTROL.os, "geteuid", create=True, return_value=1000)
+    @mock.patch.object(CONTROL.select, "POLLIN", create=True, new=1)
+    @mock.patch.object(CONTROL.select, "poll", create=True)
     @mock.patch.object(CONTROL.signal, "pidfd_send_signal", create=True)
+    @mock.patch.object(CONTROL.signal, "SIGKILL", create=True, new=_SIGKILL)
     @mock.patch.object(CONTROL.os, "pidfd_open", create=True)
     def test_forced_stop_uses_the_same_pidfd_for_both_signals(
-        self, pidfd_open, send_signal, poll, close_pidfd, read_identity
+        self, pidfd_open, send_signal, poll, _geteuid, close_pidfd, read_identity
     ):
         pidfd_open.return_value = 73
         send_signal.return_value = None
@@ -147,7 +157,8 @@ class GuardianProcessControlTests(unittest.TestCase):
             (b"python3", b"hub/web.py", b"--no-serve-frontend"),
             77,
         )
-        poll.return_value.poll.side_effect = [[], [(73, CONTROL.select.POLLIN)]]
+        poll.return_value.register = mock.Mock()
+        poll.return_value.poll.side_effect = [[], [(73, 1)]]
 
         with mock.patch.object(CONTROL.sys, "platform", "linux"):
             result = CONTROL.stop_web_process(1234, "/srv/agent-fleet")
@@ -155,12 +166,13 @@ class GuardianProcessControlTests(unittest.TestCase):
         self.assertEqual(result, "stopped")
         self.assertEqual(
             [call.args for call in send_signal.call_args_list],
-            [(73, 0, None, 0), (73, signal.SIGTERM, None, 0), (73, signal.SIGKILL, None, 0)],
+            [(73, 0, None, 0), (73, signal.SIGTERM, None, 0), (73, _SIGKILL, None, 0)],
         )
         close_pidfd.assert_called_once_with(73)
 
+    @mock.patch.object(CONTROL.os, "geteuid", create=True, return_value=1000)
     @mock.patch.object(CONTROL.os, "pidfd_open", create=True)
-    def test_pidfd_support_absence_fails_closed_without_numeric_kill(self, pidfd_open):
+    def test_pidfd_support_absence_fails_closed_without_numeric_kill(self, pidfd_open, _geteuid):
         with mock.patch.object(CONTROL.sys, "platform", "linux"), mock.patch.object(
             CONTROL.signal, "pidfd_send_signal", None, create=True
         ):
@@ -168,7 +180,8 @@ class GuardianProcessControlTests(unittest.TestCase):
                 CONTROL.stop_web_process(1234, "/srv/agent-fleet")
         pidfd_open.assert_not_called()
 
-    def test_sleep_child_identity_is_bound_to_expected_guardian_parent(self):
+    @mock.patch.object(CONTROL.os, "geteuid", create=True)
+    def test_sleep_child_identity_is_bound_to_expected_guardian_parent(self, _geteuid):
         identity = (
             CONTROL.os.geteuid(),
             "/srv/agent-fleet",

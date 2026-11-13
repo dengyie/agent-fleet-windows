@@ -40,7 +40,7 @@ class ViewXssProtectionTests(unittest.TestCase):
 
     def _view_sources(self):
         return {
-            p.name: p.read_text()
+            p.name: p.read_text(encoding="utf-8")
             for p in VIEWS_DIR.glob('*.js') if p.is_file()
         }
 
@@ -66,13 +66,13 @@ class ViewXssProtectionTests(unittest.TestCase):
             self.assertNotIn(".join('')", source, name)
 
     def test_machine_form_error_uses_textcontent_only(self):
-        machine = (VIEWS_DIR / 'machine.js').read_text()
+        machine = (VIEWS_DIR / 'machine.js').read_text(encoding="utf-8")
         self.assertIn('errorBox.textContent', machine)
         self.assertNotIn('errorBox.innerHTML', machine)
         self.assertIn("pagePath('task', task.task_id)", machine)
 
     def test_task_view_renders_patch_and_test_names_via_textcontent(self):
-        task = (VIEWS_DIR / 'task.js').read_text()
+        task = (VIEWS_DIR / 'task.js').read_text(encoding="utf-8")
         self.assertIn('pre.textContent', task)
         self.assertIn('line.textContent', task)
         self.assertIn('test_summary', task)

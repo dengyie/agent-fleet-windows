@@ -16,7 +16,7 @@ def _function_block(source, name):
 
 
 def test_platform_api_exposes_window_lifecycle_wrappers():
-    source = PLATFORM_API.read_text()
+    source = PLATFORM_API.read_text(encoding="utf-8")
     for name in (
         "createExecutionWindow",
         "listExecutionWindows",
@@ -38,7 +38,7 @@ def test_platform_api_exposes_window_lifecycle_wrappers():
 
 
 def test_assistant_uses_a_separate_window_cursor_and_recovery_flow():
-    source = (ASSISTANT_VIEW.read_text() + (ROOT / 'frontend/assets/views/assistant/panels.js').read_text())
+    source = (ASSISTANT_VIEW.read_text(encoding="utf-8") + (ROOT / 'frontend/assets/views/assistant/panels.js').read_text(encoding="utf-8"))
     for value in (
         "createExecutionWindow",
         "listExecutionWindows",
@@ -60,9 +60,9 @@ def test_assistant_uses_a_separate_window_cursor_and_recovery_flow():
 
 
 def test_assistant_requires_explicit_takeover_and_renders_latest_frame():
-    source = (ASSISTANT_VIEW.read_text() +
-             (ROOT / 'frontend/assets/views/assistant/panels.js').read_text() +
-             PLATFORM_API.read_text())
+    source = (ASSISTANT_VIEW.read_text(encoding="utf-8") +
+             (ROOT / 'frontend/assets/views/assistant/panels.js').read_text(encoding="utf-8") +
+             PLATFORM_API.read_text(encoding="utf-8"))
     connect = source.split("async function doConnectExecutionWindow", 1)[-1].split(
         "async function takeControl", 1,
     )[0]
@@ -75,7 +75,7 @@ def test_assistant_requires_explicit_takeover_and_renders_latest_frame():
 
 
 def test_assistant_window_is_dom_safe_and_does_not_cancel_on_close_or_unload():
-    source = (ASSISTANT_VIEW.read_text() + (ROOT / 'frontend/assets/views/assistant/panels.js').read_text())
+    source = (ASSISTANT_VIEW.read_text(encoding="utf-8") + (ROOT / 'frontend/assets/views/assistant/panels.js').read_text(encoding="utf-8"))
     assert "innerHTML" not in source
     assert "fetch(" not in source
     assert "textContent" in source
@@ -87,7 +87,7 @@ def test_assistant_window_is_dom_safe_and_does_not_cancel_on_close_or_unload():
 
 
 def test_window_api_parameters_are_bounded_and_encoded():
-    source = PLATFORM_API.read_text()
+    source = PLATFORM_API.read_text(encoding="utf-8")
     list_block = _function_block(source, "listExecutionWindows")
     events_block = _function_block(source, "getExecutionWindowEvents")
     assert "Math.max(1, Math.min(50" in list_block

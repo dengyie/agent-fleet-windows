@@ -23,6 +23,7 @@ OWNER = 'review@example.test'
 
 
 @pytest.mark.parametrize("platform_enabled", [False, True])
+@pytest.mark.skipif(os.name == "nt", reason="executes deploy/package-release.sh via bash; Linux test job covers it")
 def test_packaged_release_can_start_platform(tmp_path, platform_enabled):
     archive = tmp_path / 'release.tgz'
     subprocess.run(['bash', str(ROOT / 'deploy/package-release.sh'), str(archive)], cwd=ROOT, check=True, capture_output=True)

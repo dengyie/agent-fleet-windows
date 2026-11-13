@@ -8,12 +8,14 @@ from tools.runner_config import ConfigError, load_config
 def _write(tmp: Path, agents_block: str = "") -> Path:
     cred = tmp / "runner-credential"
     cred.write_text("secret-token")
+    # YAML 双引号标量会把 \U 当 16 进制转义（Windows 反斜杠路径必炸）；
+    # 配置文件里写正斜杠，Windows 的 pathlib/open 同样接受。
     body = (
         "hub: https://example.com\n"
         "machine: m1\n"
-        f"credential_file: {cred}\n"
+        f"credential_file: {cred.as_posix()}\n"
         "projects:\n"
-        f'  p1:\n    path: "{tmp}"\n'
+        f'  p1:\n    path: "{tmp.as_posix()}"\n'
         + agents_block
     )
     p = tmp / "runner.yaml"

@@ -76,7 +76,7 @@ class ObservationRepositoryRegressionTests(unittest.TestCase):
         repo.save_snapshot("hk", {"machine": "hk", "seq": 1})
         repo.save_snapshot("hk", {"machine": "hk", "seq": 2})
         self.assertEqual(
-            len((root / "hk.jsonl").read_text().splitlines()), 2)
+            len((root / "hk.jsonl").read_text(encoding="utf-8").splitlines()), 2)
 
     def test_malformed_jsonl_lines_are_skipped(self):
         root = Path(tempfile.mkdtemp())

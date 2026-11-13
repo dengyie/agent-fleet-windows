@@ -25,13 +25,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 class BoundaryTests(unittest.TestCase):
     def test_http_adapters_do_not_reference_storage_globals(self):
         for path in sorted((REPO_ROOT / "hub" / "http").glob("*.py")):
-            source = path.read_text()
+            source = path.read_text(encoding="utf-8")
             self.assertNotIn("STATE_DIR", source, path.name)
             self.assertNotIn("DB_PATH", source, path.name)
             self.assertNotIn("EVENT_LOG", source, path.name)
 
     def test_legacy_entrypoint_uses_bootstrap(self):
-        source = (REPO_ROOT / "hub" / "web.py").read_text()
+        source = (REPO_ROOT / "hub" / "web.py").read_text(encoding="utf-8")
         self.assertIn("create_app", source)
         self.assertIn("from hub.bootstrap import create_app", source)
 
@@ -39,7 +39,7 @@ class BoundaryTests(unittest.TestCase):
         for layer in ("domain", "application", "infrastructure"):
             layer_dir = REPO_ROOT / "hub" / layer
             for path in sorted(layer_dir.glob("*.py")):
-                source = path.read_text()
+                source = path.read_text(encoding="utf-8")
                 self.assertNotIn("import flask", source, path.name)
                 self.assertNotIn("from flask", source, path.name)
 

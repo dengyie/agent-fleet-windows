@@ -77,7 +77,7 @@ class SelfReportContractTests(unittest.TestCase):
     def test_probe_source_has_no_production_hub_default(self):
         source = (
             Path(__file__).resolve().parents[1] / "tools" / "agent-self-report.py"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         self.assertNotIn("mangoqwq", source)
         self.assertNotIn("agent.mangoqwq.com", source)
         module = load_self_report_module()
@@ -178,7 +178,7 @@ class ReconciliationBoundaryTests(unittest.TestCase):
         )
         root = Path(__file__).resolve().parents[1]
         path = root / "hub" / "application" / "reconciliation_service.py"
-        tree = _ast.parse(path.read_text())
+        tree = _ast.parse(path.read_text(encoding="utf-8"))
         imported = set()
         for node in _ast.walk(tree):
             if isinstance(node, _ast.Import):
@@ -192,6 +192,7 @@ class ReconciliationBoundaryTests(unittest.TestCase):
         self.assertTrue(callable(start_lease_reconciler))
 
 
+@unittest.skipIf(os.name == "nt", "executes deploy/hk-*.sh via bash (WSL stub on Windows); Linux test job covers them")
 class DeployScriptHygieneTests(unittest.TestCase):
     root = Path(__file__).resolve().parents[1]
 
@@ -215,7 +216,7 @@ class DeployScriptHygieneTests(unittest.TestCase):
             "deploy/hk-readonly-evidence.sh",
             "deploy/hk-self-report-loop.sh",
         ):
-            source = (self.root / relative).read_text()
+            source = (self.root / relative).read_text(encoding="utf-8")
             self.assertNotIn("${FLEET_USER:-fleet}", source, relative)
             self.assertNotIn("${HOME}/agent-fleet", source, relative)
             self.assertNotIn("/home/demo", source, relative)

@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import sys
 
 import pytest
 
@@ -217,6 +218,38 @@ def _write_shim(directory: Path, name: str, record: Path):
     path.chmod(0o755)
 
 
+def _swap_spawner(monkeypatch, shim_dir: Path, record: Path, names: tuple[str, ...]):
+    """nt 上 CreateProcess 不解析 shebang 脚本（固定 argv[0] 永远找不到）。
+
+    与 fake_git 同理 swap spawn 层：把 shim argv[0] 换成真实解释器执行
+    Python shim（记录 $0|$@、输出 token 行、退出 0）。POSIX 侧原样保留，
+    shebang 语义继续被真实验证。
+    """
+    if os.name != "nt":
+        return
+    for name in names:
+        script = shim_dir / f"{name}.py"
+        script.write_text(
+            "import sys\n"
+            f"parts = [{str(name)!r}] + sys.argv[1:]\n"
+            f"with open({str(record)!r}, 'a', encoding='utf-8') as fh:\n"
+            "    fh.write('|'.join(parts) + '\\n')\n"
+            "print('token=runtime-secret /tmp/runtime-private')\n"
+            "sys.exit(0)\n",
+            encoding="utf-8",
+        )
+    from tools import local_process
+    original = local_process.run
+
+    def swapped(argv, **kwargs):
+        head = argv[0] if argv and isinstance(argv[0], str) else ""
+        if head in names:
+            argv = [sys.executable, str(shim_dir / f"{head}.py"), *argv[1:]]
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(local_process, "run", swapped)
+
+
 @pytest.mark.parametrize(
     ("adapter", "alias", "shim"),
     [
@@ -226,7 +259,7 @@ def _write_shim(directory: Path, name: str, record: Path):
     ],
 )
 def test_runtime_executes_fixed_log_adapter_through_hub_and_journal(
-    tmp_path, adapter, alias, shim
+    tmp_path, adapter, alias, shim, monkeypatch
 ):
     app = create_app(FleetConfig.from_root(
         tmp_path, dev_operator=OWNER, platform_enabled=True,
@@ -265,6 +298,7 @@ def test_runtime_executes_fixed_log_adapter_through_hub_and_journal(
     shim_dir.mkdir()
     record = tmp_path / "argv.txt"
     _write_shim(shim_dir, shim, record)
+    _swap_spawner(monkeypatch, shim_dir, record, (shim,))
     runtime = NodeRuntime(NodeRuntimeConfig(
         node_id="node-a", credential="node-a:" + "a" * 40,
         workspace_root=tmp_path / "workspace",
@@ -360,12 +394,13 @@ def test_runtime_without_inspect_capability_does_not_start_subprocess(tmp_path):
     ],
 )
 def test_runtime_executes_fixed_inspect_adapter_through_subprocess_and_journal(
-    tmp_path, adapter, alias, shim
+    tmp_path, adapter, alias, shim, monkeypatch
 ):
     shim_dir = tmp_path / "shims"
     shim_dir.mkdir()
     record = tmp_path / "argv.txt"
     _write_shim(shim_dir, shim, record)
+    _swap_spawner(monkeypatch, shim_dir, record, (shim,))
     config = NodeRuntimeConfig(
         node_id="node-a", credential="node-a:secret",
         workspace_root=tmp_path / "workspace",
@@ -401,7 +436,7 @@ def test_runtime_executes_fixed_inspect_adapter_through_subprocess_and_journal(
     assert record.read_text(encoding="utf-8").count(shim) == 1
 
 
-def test_runtime_inspect_capability_closes_hub_postcheck_and_health_evidence(tmp_path):
+def test_runtime_inspect_capability_closes_hub_postcheck_and_health_evidence(tmp_path, monkeypatch):
     app = create_app(FleetConfig.from_root(
         tmp_path, dev_operator=OWNER, platform_enabled=True,
         service_monitoring_enabled=True, service_actions_enabled=True,
@@ -435,6 +470,7 @@ def test_runtime_inspect_capability_closes_hub_postcheck_and_health_evidence(tmp
     shim_dir.mkdir()
     record = tmp_path / "inspect-argv.txt"
     _write_shim(shim_dir, "systemctl", record)
+    _swap_spawner(monkeypatch, shim_dir, record, ("systemctl",))
     transport = _Transport(client)
     runtime = NodeRuntime(NodeRuntimeConfig(
         node_id="node-a", credential="node-a:" + "a" * 40,

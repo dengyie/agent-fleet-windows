@@ -109,9 +109,16 @@ class FixedServiceLogReader:
         try:
             current_path = os.environ.get("PATH", "/usr/bin:/bin")
             path = os.pathsep.join((*self.path_prefix, current_path))
+            env = {"PATH": path}
+            if os.name == "nt":
+                # 与 run_fixed_command 同理：nt 子进程缺 SystemRoot 直接退出码 1。
+                for key in ("SystemRoot", "SYSTEMROOT", "windir"):
+                    value = os.environ.get(key)
+                    if value:
+                        env[key] = value
             result = self.runner(
                 list(argv), capture_output=True, text=True, timeout=self.timeout_s,
-                check=False, shell=False, env={"PATH": path},
+                check=False, shell=False, env=env,
             )
         except subprocess.TimeoutExpired:
             raise ServiceLogReaderError("timeout") from None

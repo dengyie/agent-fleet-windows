@@ -178,6 +178,7 @@ class DeploymentSafetyTests(unittest.TestCase):
         self.assertIn('fleet_cp_tree_retry()', helper)
         self.assertIn('attempts < 5', helper)
 
+    @unittest.skipIf(os.name == "nt", "executes bash deploy helpers (rsync/POSIX paths); Linux test job covers them")
     def test_overlay_helper_fallback_preserves_runtime_and_rolls_back(self):
         helper = REPO_ROOT / "deploy" / "hk-overlay-sync.sh"
         with tempfile.TemporaryDirectory() as td:
@@ -302,6 +303,7 @@ class DeploymentSafetyTests(unittest.TestCase):
         return subprocess.run(['bash', str(PACKAGE_SCRIPT), *args],
                               capture_output=True, text=True, env=env)
 
+    @unittest.skipIf(os.name == "nt", "executes deploy/package-frontend-release.sh via bash; Linux test job covers it")
     def test_package_copies_only_frontend_release_files_and_writes_manifest(self):
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / 'pkg'
@@ -354,6 +356,7 @@ class DeploymentSafetyTests(unittest.TestCase):
             # fail-closed: nothing is emitted when packaging is refused.
             self.assertFalse(out.exists(), 'forbidden packaging must not create output')
 
+    @unittest.skipIf(os.name == "nt", "executes deploy/package-frontend-release.sh via bash; Linux test job covers it")
     def test_package_manifest_is_deterministic(self):
         with tempfile.TemporaryDirectory() as td:
             out1 = Path(td) / 'pkg1'
@@ -377,6 +380,7 @@ class RoutingDocumentationTests(unittest.TestCase):
     documenting that Access bypass stays an edge policy.
     """
 
+    @unittest.skipIf(os.name == "nt", "executes deploy/test-release-routing.sh via bash (WSL stub on Windows); Linux test job covers it")
     def test_release_routing_smoke_matches_current_config(self):
         result = subprocess.run(
             ["bash", str(REPO_ROOT / "deploy/test-release-routing.sh")],
@@ -526,6 +530,7 @@ class RuntimeStoreHygieneTests(unittest.TestCase):
                 proc.stdout.strip().startswith(str(release / "tools")),
                 f"tools resolved outside the release: {proc.stdout}")
 
+    @unittest.skipIf(os.name == "nt", "executes deploy/package-release.sh + tar via bash; Linux test job covers it")
     def test_full_release_archive_includes_runtime_imports_not_var(self):
         script = REPO_ROOT / "deploy" / "package-release.sh"
         with tempfile.TemporaryDirectory() as td:
@@ -572,6 +577,7 @@ class RuntimeStoreHygieneTests(unittest.TestCase):
                          'backend release must not embed the independent UI')
         self.assertFalse(any(e.startswith('state/') or '/state/' in e for e in listing))
 
+    @unittest.skipIf(os.name == "nt", "executes deploy/package-release.sh via bash; Linux test job covers it")
     def test_parallel_full_release_archives_have_isolated_staging(self):
         script = REPO_ROOT / "deploy" / "package-release.sh"
         with tempfile.TemporaryDirectory() as td:
@@ -624,6 +630,7 @@ class RuntimeStoreHygieneTests(unittest.TestCase):
             self.assertFalse(any(REPO_ROOT.glob(".package-release.*")))
 
 
+    @unittest.skipIf(os.name == "nt", "executes deploy/package-release.sh via bash; Linux test job covers it")
     def test_full_release_archive_with_origin_embeds_release_origin_stamp(self):
         script = REPO_ROOT / "deploy" / "package-release.sh"
         origin = "deadbeef|424242|https://github.com/dengyie/agent-fleet/actions/runs/424242"

@@ -9,6 +9,11 @@ import pytest
 
 HELPER = Path(__file__).resolve().parents[1] / 'deploy/hk-overlay-sync.sh'
 
+# 每个用例都经 bash 执行 deploy/hk-overlay-sync.sh（POSIX 路径、rsync、st_ino
+# 语义）；Windows runner 只有 WSL 桩。Linux test job 完整覆盖这些脚本。
+pytestmark = pytest.mark.skipif(
+    os.name == 'nt', reason='executes deploy/hk-overlay-sync.sh via bash; Linux test job covers it')
+
 
 @pytest.mark.parametrize('fallback', [False, True])
 def test_code_rollback_preserves_live_database_and_credentials(tmp_path, fallback):

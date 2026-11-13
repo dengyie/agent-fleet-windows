@@ -77,11 +77,19 @@ def run_fixed_command(
         normalized_prefix.append(item)
     current_path = os.environ.get("PATH", "/usr/bin:/bin")
     path = os.pathsep.join((*normalized_prefix, current_path))
+    env = {"PATH": path}
+    if os.name == "nt":
+        # 与 DirectoryBackend._child_env 同理：nt 子进程（python 初始化、CRT
+        # 临时文件）缺 SystemRoot 直接退出码 1，严格 runner 上必现。
+        for key in ("SystemRoot", "SYSTEMROOT", "windir"):
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
     try:
         result = execute(
             list(argv), capture_output=True, text=True, errors="replace",
             timeout=_bounded_timeout(timeout_s),
-            check=False, shell=False, env={"PATH": path},
+            check=False, shell=False, env=env,
         )
     except subprocess.TimeoutExpired:
         return "timeout", "", None, max(0.0, float(now()) - started)
