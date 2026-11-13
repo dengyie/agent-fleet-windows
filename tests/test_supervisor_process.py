@@ -34,6 +34,11 @@ from unittest import mock
 from tools.supervisor import model as model_mod
 from tools.supervisor import supervisor as sup_mod
 
+# Windows 缺 SIGKILL/SIGSTOP/SIGCONT；断言直接对齐产品常量。
+_NT_SIGKILL = sup_mod._SIGKILL
+_NT_SIGSTOP = sup_mod._SIGSTOP
+_NT_SIGCONT = sup_mod._SIGCONT
+
 
 def _py(code):
     return [sys.executable, "-c", code]
@@ -93,18 +98,24 @@ class FakeProc:
 
     def receive(self, sig):
         self.signals.append(sig)
-        if sig == signal.SIGKILL:
+        # 与产品常量对齐：nt 上 signal 缺 SIGKILL/SIGSTOP/SIGCONT，产品用
+        # getattr 默认值（9/19/18）发 int；fake 若自造默认值就对不上。
+        kill = sup_mod._SIGKILL
+        term = sup_mod._SIGTERM
+        stop = sup_mod._SIGSTOP
+        cont = sup_mod._SIGCONT
+        if sig == kill:
             self.alive = False
             self.alive_unknown = False
             self.exit_code = -sig
-        elif sig in (signal.SIGTERM, signal.SIGINT):
+        elif sig in (term, getattr(signal, "SIGINT", 2)):
             if not self.backend.deny_graceful:
                 self.alive = False
                 self.exit_code = -sig
             # a process that ignores SIGTERM stays alive
-        elif sig == signal.SIGSTOP:
+        elif sig == stop:
             self.stopped = True
-        elif sig == signal.SIGCONT:
+        elif sig == cont:
             self.stopped = False
 
 
@@ -411,7 +422,7 @@ class SupervisorTests(unittest.TestCase):
                          "unsupported_action")
         self.assertEqual(ops.create_calls, after)
         self.assertEqual(sv.get(m.session_id).state, "quarantined")
-        self.assertNotIn(signal.SIGCONT, ops.children[0].signals)
+        self.assertNotIn(_NT_SIGCONT, ops.children[0].signals)
 
     def test_append_user_turn_natural_finish_without_identity_stays_terminated(self):
         ops = FakeOps()
@@ -503,7 +514,7 @@ class SupervisorTests(unittest.TestCase):
             self.assertNotIn(priv, json.dumps(sv.status(m.session_id)))
         # Native resume is a new CLI process, never SIGCONT thaw.
         self.assertEqual(ops.children[0].signals, launch_signals)
-        self.assertNotIn(signal.SIGCONT, ops.children[-1].signals)
+        self.assertNotIn(_NT_SIGCONT, ops.children[-1].signals)
 
     def test_native_resume_survives_natural_completion_without_sigcont(self):
         ops = FakeOps()
@@ -535,7 +546,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(resume["argv"][1:4], ["exec", "resume", "--json"])
         self.assertIn("sessTok9", resume["argv"])
         self.assertNotIn("--ephemeral", resume["argv"])
-        self.assertNotIn(signal.SIGCONT, handle.signals)
+        self.assertNotIn(_NT_SIGCONT, handle.signals)
 
     def test_terminate_wins_over_native_resume_starting_concurrently(self):
         entered_create = threading.Event()
@@ -573,7 +584,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertIsNone(sv._handle_of(m.session_id))
         resumed = ops.children[-1]
         self.assertFalse(resumed.alive)
-        self.assertIn(signal.SIGKILL, resumed.signals)
+        self.assertIn(_NT_SIGKILL, resumed.signals)
 
     def test_stale_native_resume_reports_unverified_cleanup_failure(self):
         entered_create = threading.Event()
@@ -661,7 +672,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertTrue(old.stopped)
         resumed = ops.children[-1]
         self.assertFalse(resumed.alive)
-        self.assertIn(signal.SIGKILL, resumed.signals)
+        self.assertIn(_NT_SIGKILL, resumed.signals)
 
     def test_stale_process_completion_cannot_replace_resumed_session(self):
         ops = FakeOps()
@@ -785,7 +796,7 @@ class SupervisorTests(unittest.TestCase):
                 self.assertEqual(sv.get(m.session_id).state, expected_state)
                 resumed = ops.children[-1]
                 self.assertFalse(resumed.alive)
-                self.assertIn(signal.SIGKILL, resumed.signals)
+                self.assertIn(_NT_SIGKILL, resumed.signals)
 
     def test_launch_keeps_cwd_env_private_after_handle_release(self):
         sv = self._sv()
@@ -902,11 +913,11 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(sv.get(m.session_id).state, "paused")
         proc = sv._ops.children[0]
         self.assertTrue(proc.stopped)
-        self.assertIn(signal.SIGSTOP, proc.signals)
+        self.assertIn(_NT_SIGSTOP, proc.signals)
         self.assertEqual(sv.resume_session(m.session_id), "running")
         self.assertEqual(sv.get(m.session_id).state, "running")
         self.assertFalse(proc.stopped)
-        self.assertIn(signal.SIGCONT, proc.signals)
+        self.assertIn(_NT_SIGCONT, proc.signals)
 
     def test_pause_failed_surfaces_bounded(self):
         sv = self._sv(ops=FakeOps(deny_signals=True))
@@ -961,7 +972,7 @@ class SupervisorTests(unittest.TestCase):
         outcome = sv.terminate_session(m.session_id, grace_s=0.05)
         self.assertEqual(outcome, "terminated_forced")
         handle = sv._ops.children[0]
-        self.assertIn(signal.SIGKILL, handle.signals)
+        self.assertIn(_NT_SIGKILL, handle.signals)
 
     def test_terminate_escape_degrades(self):
         ops = FakeOps()
@@ -991,7 +1002,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(sv.get(m.session_id).state, "quarantined")
         proc = sv._ops.children[0]
         self.assertTrue(proc.stopped)
-        self.assertIn(signal.SIGSTOP, proc.signals)
+        self.assertIn(_NT_SIGSTOP, proc.signals)
 
     def test_quarantine_failed_not_silent_success(self):
         sv = self._sv(ops=FakeOps(deny_signals=True))
@@ -1224,7 +1235,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(sv.get(m.session_id).state, "terminated")
         self.assertEqual(sv.get(m.session_id).reason, "group_remaining")
         # the SIGKILL reached the held-open member
-        self.assertIn(signal.SIGKILL, handle.signals)
+        self.assertIn(_NT_SIGKILL, handle.signals)
         self.assertLess(elapsed, 1.5, "post-exit flush must be wall-bounded")
 
     def test_natural_exit_clean_eof_still_reports_finished(self):
