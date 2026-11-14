@@ -254,7 +254,10 @@ const unknown = structuredClone(value); Object.assign(unknown.items[0], {input_t
   estimated_cost:null,cost_source:'unknown',unknown_count:1});
 assert.equal(parseUsageSummary(unknown).items[0].estimated_cost, null);
 """
-    result = subprocess.run(["node", "--input-type=module", "-e", code, module], capture_output=True, text=True, timeout=30)
+    # node 输出 UTF-8；text=True 默认 ANSI 代码页在 CI cp1252 上会让
+    # _readerthread UnicodeDecodeError → stdout/stderr 为 None。
+    result = subprocess.run(["node", "--input-type=module", "-e", code, module],
+                            capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
 
 

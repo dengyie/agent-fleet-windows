@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 class DeploymentPidfdSourceTests(unittest.TestCase):
     def test_auto_deployer_does_not_signal_a_pid_after_snapshot_comparison(self):
-        source = (REPO_ROOT / "deploy" / "auto_deploy_container.py").read_text()
+        source = (REPO_ROOT / "deploy" / "auto_deploy_container.py").read_text(encoding="utf-8")
         start = source.index("def stop(root):")
         end = source.index("\n\ndef probe", start)
         stop = source[start:end]
@@ -19,13 +19,13 @@ class DeploymentPidfdSourceTests(unittest.TestCase):
         self.assertNotRegex(stop, re.compile(r"\bos\.kill\(pid,"))
         self.assertIn("_stop_pidfd(pidfd)", stop)
         self.assertIn("_send_pidfd_signal(pidfd, signum)", source)
-        guardian = (REPO_ROOT / "hub" / "agent_fleet_guardian.py").read_text()
+        guardian = (REPO_ROOT / "hub" / "agent_fleet_guardian.py").read_text(encoding="utf-8")
         self.assertNotIn("os.kill(old_pid", guardian)
         self.assertIn("_stop_process_with_pidfd(old_pid, expected_cwd)", guardian)
         self.assertIn("proc.poll()", guardian)
 
     def test_container_installer_does_not_signal_reused_hub_or_probe_pids(self):
-        source = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text()
+        source = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text(encoding="utf-8")
         probe_start = source.index("stop_probe_loop()")
         probe_end = source.index("\nstart_probe_loop()", probe_start)
         probe_stop = source[probe_start:probe_end]
@@ -45,7 +45,7 @@ class DeploymentPidfdSourceTests(unittest.TestCase):
         self.assertIn('probe_process_matches "$pid" "$expected_cwd"', probe_stop)
 
     def test_probe_stop_does_not_remove_advisory_pid_file(self):
-        source = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text()
+        source = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text(encoding="utf-8")
         probe_stop_start = source.index("stop_probe_loop()")
         probe_stop_end = source.index("\nstart_probe_loop()", probe_stop_start)
         probe_stop = source[probe_stop_start:probe_stop_end]
@@ -64,7 +64,7 @@ class DeploymentPidfdSourceTests(unittest.TestCase):
         self.assertNotIn('rm -f "$probe_pid_file"', poll)
 
     def test_probe_start_poll_does_not_remove_new_pid_file_on_transient_identity_miss(self):
-        source = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text()
+        source = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text(encoding="utf-8")
         start = source.index("start_probe_loop()")
         end = source.index("\nwait_for_status()", start)
         probe_start = source[start:end]
@@ -75,7 +75,7 @@ class DeploymentPidfdSourceTests(unittest.TestCase):
         self.assertNotIn('rm -f "$probe_pid_file"', poll)
 
     def test_installer_uses_target_release_helper_after_cutover(self):
-        source = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text()
+        source = (REPO_ROOT / "deploy" / "hk-container-install.sh").read_text(encoding="utf-8")
         self.assertIn('python3 \"$release/deploy/hk-web-process-control.py\"', source)
         self.assertIn('old_uid=$(id -u \"$FLEET_USER\")', source)
 

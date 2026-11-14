@@ -33,7 +33,10 @@ def test_assistant_submission_uses_selected_model_and_stable_request(tmp_path, s
         result = subprocess.run([
             node, str(ROOT / 'tests/fixtures/frontend/assistant_submission.mjs'),
             f'http://127.0.0.1:{server.server_port}', str(ROOT / 'frontend/assets/views/assistant.js'), scenario,
-        ], capture_output=True, text=True, timeout=15)
+            # node 输出 UTF-8（中文 UI 文案）；text=True 默认走 ANSI 代码页，
+            # CI cp1252 上 _readerthread 直接 UnicodeDecodeError → stdout 为
+            # None → json.loads(None) TypeError。显式指定编码才能拿到字节流。
+            ], capture_output=True, text=True, encoding="utf-8", timeout=15)
         assert result.returncode == 0, result.stderr
         observed = json.loads(result.stdout)
     finally:

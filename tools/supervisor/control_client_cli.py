@@ -286,4 +286,12 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    # 中文 help/状态行打到 charmap 管道（nt 的 ANSI 代码页，CI capture、任务
+    # 计划程序重定向均如此）会 UnicodeEncodeError —— --help 直接崩溃。降级
+    # 为替换字符；POSIX UTF-8 下永不触发，无条件执行。
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(errors="replace")
+        except (AttributeError, OSError):
+            pass
     raise SystemExit(main())

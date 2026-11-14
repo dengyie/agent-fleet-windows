@@ -248,6 +248,16 @@ def open_http(request: Request, *, timeout_s: float, use_proxy: bool = True) -> 
         transferred = True
         return owned
     except (OSError, URLError, http.client.HTTPException) as exc:
+        # 两个"预算用尽"路径会竞态到达这里：Timer 先中断活 fd（握手中断 →
+        # 预算尽 → remaining() 抛 TimeoutError），或握手的 settimeout 先
+        # 到点（ssl TimeoutError，被 urllib 的 except OSError 包成 URLError
+        # —— TimeoutError 是 OSError 子类）。后者预算同样已被真实尝试花
+        # 掉：reason 是 TimeoutError 时统一归一为 TimeoutError，语义都是
+        # 截止时间用尽，调用方（acceptance_check）按 reason 再分类。
+        reason = getattr(exc, 'reason', exc)
+        if isinstance(reason, TimeoutError):
+            deadline.close()
+            raise reason from exc
         try:
             deadline.remaining()
         except TimeoutError as expired:

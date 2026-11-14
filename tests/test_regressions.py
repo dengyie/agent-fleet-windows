@@ -87,7 +87,7 @@ class IngestScanTests(unittest.TestCase):
         })
         current = store.read_current("katabump")
         current["_ts"] = time.time() - 301
-        (self.temp_dir / "katabump.json").write_text(__import__("json").dumps(current))
+        (self.temp_dir / "katabump.json").write_text(__import__("json").dumps(current), encoding="utf-8")
         changes = scan.reconcile_ingest(now=time.time())
         snapshot = store.read_current("katabump")
 
@@ -104,7 +104,7 @@ class IngestScanTests(unittest.TestCase):
 
         current = store.read_current("katabump")
         self.assertIn(current["seq"], range(20))
-        lines = (self.temp_dir / "katabump.jsonl").read_text().splitlines()
+        lines = (self.temp_dir / "katabump.jsonl").read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(lines), 20)
         for line in lines:
             json.loads(line)

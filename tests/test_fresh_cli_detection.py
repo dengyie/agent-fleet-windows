@@ -18,10 +18,17 @@ def test_cli_detection_without_session_history(tmp_path, family, command, instal
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     if installed:
-        executable = bin_dir / command
-        # Detection should inspect availability, never launch the agent.
-        executable.write_text("#!/bin/sh\nexit 99\n")
-        executable.chmod(0o755)
+        # nt 的 shutil.which（3.10）：无 PATHEXT 扩展名的裸文件名根本不查
+        # （gh-109590 的"直接名兜底"3.12 才有）；真实 nt CLI 就是 .cmd shim，
+        # fixture 按平台写对应形态，探测语义（availability-only）不变。
+        if os.name == "nt":
+            executable = bin_dir / (command + ".cmd")
+            # Detection should inspect availability, never launch the agent.
+            executable.write_text("@echo off\r\nexit /b 99\r\n")
+        else:
+            executable = bin_dir / command
+            executable.write_text("#!/bin/sh\nexit 99\n")
+            executable.chmod(0o755)
 
     class Context:
         def run_python(self, script):

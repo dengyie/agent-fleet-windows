@@ -90,6 +90,7 @@ class BaseAdapter:
 
         deadline = time.monotonic() + self.timeout_s
         aborted = False
+        hit_deadline = False
         while not timed_out.wait(1.0):
             if should_abort and should_abort():
                 aborted = True
@@ -97,19 +98,19 @@ class BaseAdapter:
                 break
             if time.monotonic() > deadline:
                 _kill(proc)
+                hit_deadline = True
                 break
         timed_out.wait(10)  # 等进程确认退出
         reader_thread.join(timeout=5)
-        try:
-            proc.stdout.close()
-        except Exception:
-            pass
 
         if aborted:
             return AdapterResult(exit_code=130, log_tail="\n".join(tail) + "\n[aborted: lease lost]",
                                  aborted=True)
-        if proc.returncode is None or (proc.returncode and proc.returncode < 0 and
-                                       time.monotonic() > deadline):
+        # 超时语义由"是否到达 deadline 并主动终止"决定，而不是猜 returncode：
+        # POSIX 上 SIGTERM/SIGKILL 后 returncode<0；nt 的 TerminateProcess 给出
+        # 任意退出码（本产品固定 124）——两者都必须返回 timed_out=True。
+        if hit_deadline or proc.returncode is None or (proc.returncode and proc.returncode < 0 and
+                                                       time.monotonic() > deadline):
             return AdapterResult(exit_code=124,
                                  log_tail="\n".join(tail) + f"\n[timeout after {self.timeout_s}s]",
                                  timed_out=True)
@@ -119,6 +120,22 @@ class BaseAdapter:
 def _kill(proc):
     import os
     import signal
+    # nt 没有 killpg / POSIX 进程组（start_new_session 在 nt 是 no-op）。
+    # 平台对应的整组终止：先温和终止，再强制终止，兜底等价验证退出。
+    if os.name == "nt":
+        import ctypes
+        process_terminate = 1
+        handle = ctypes.windll.kernel32.OpenProcess(process_terminate, False, proc.pid)
+        if handle:
+            try:
+                ctypes.windll.kernel32.TerminateProcess(handle, 124)
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        return
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except Exception:

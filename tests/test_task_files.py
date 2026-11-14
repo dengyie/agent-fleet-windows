@@ -9,6 +9,7 @@ redaction, rate limit, audit, operator auth).
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -82,11 +83,20 @@ class WorktreeSnapshotTests(unittest.TestCase):
     def test_collects_allowlisted_text_and_skips_symlink_secret_binary(self):
         wt = worktree.create_worktree(self.project, "t-files1")
         (wt / "src").mkdir()
-        (wt / "src" / "hello.py").write_text("print('hi')\n")
+        # nt 上 text 模式写文件把 \n 翻译成 os.linesep(\r\n)（newline=None 的
+        # 写端语义），collect_result_files 如实读回盘上字节；断言写与读一致，
+        # 用 write_bytes 固定字节，两平台相同。
+        (wt / "src" / "hello.py").write_bytes(b"print('hi')\n")
         (wt / ".env").write_text("SECRET=1\n")
         (wt / "id_rsa").write_text("-----BEGIN OPENSSH PRIVATE KEY-----\n")
         (wt / "blob.bin").write_bytes(b"\x00\x01\x02\xff")
-        (wt / "src" / "link.py").symlink_to(wt / "src" / "hello.py")
+        if os.name == "nt":
+            # nt 建符号链接需要 SeCreateSymbolicLinkPrivilege（非管理员/CI
+            # runner 特权差异）；skip-symlink 语义由 Linux 阻塞门覆盖，此处
+            # 有无 link.py 都验证 allowlist 收集本身。
+            pass
+        else:
+            (wt / "src" / "link.py").symlink_to(wt / "src" / "hello.py")
         files = result_files.collect_result_files(wt)
         paths = {item["path"] for item in files}
         self.assertEqual(paths, {"src/hello.py"})

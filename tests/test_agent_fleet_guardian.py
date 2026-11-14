@@ -207,7 +207,7 @@ class TestAgentFleetGuardian(unittest.IsolatedAsyncioTestCase):
                 )
 
     def test_guardian_routes_old_hub_stop_through_pidfd_helper(self):
-        source = (Path(__file__).resolve().parents[1] / "hub" / "agent_fleet_guardian.py").read_text()
+        source = (Path(__file__).resolve().parents[1] / "hub" / "agent_fleet_guardian.py").read_text(encoding="utf-8")
         restart = source[source.index("async def restart_service"):source.index("async def agent_fleet_guardian_watcher")]
         self.assertIn("_stop_process_with_pidfd(old_pid, expected_cwd)", restart)
         self.assertNotIn("os.kill(old_pid", restart)
@@ -247,7 +247,7 @@ class TestAgentFleetGuardian(unittest.IsolatedAsyncioTestCase):
         )
         source = (
             Path(__file__).resolve().parents[1] / "hub" / "agent_fleet_guardian.py"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         self.assertNotIn("/home/demo", source)
 
 

@@ -193,7 +193,12 @@ def test_background_scheduler_eventually_services_owners_after_first_page(tmp_pa
         if thread not in existing_threads and thread.name == "platform-schedules"
     )
     try:
-        assert reached_final_owner.wait(timeout=5), "owner past the first 100 remains unscheduled"
+        # 预算核算：wait(1s)→首轮 poll，100 owner × tick_once（CI 2 核满载
+        # GIL/慢盘 ≈ 3x，实测 1.2s→4.4s），owner-100 必然落在第二轮
+        # （wait(1s) 之后）≈ 6.6s —— 5s 预算在 dev 快盘之外就不够了。产品
+        # 语义不变（分页 limit=100，owner-100 必须跨轮触达）；等待预算放大
+        # 到 40s 覆盖 runner 绝对速度，确定性终止由 stop() 保证。
+        assert reached_final_owner.wait(timeout=40), "owner past the first 100 remains unscheduled"
     finally:
         stop()
     assert not scheduler_thread.is_alive()

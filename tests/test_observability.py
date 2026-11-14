@@ -61,7 +61,7 @@ class ScanFilterTests(unittest.TestCase):
         })
         current = store.read_current(machine)
         current["_ts"] = time.time() - 301
-        (self.temp_dir / f"{machine}.json").write_text(json.dumps(current))
+        (self.temp_dir / f"{machine}.json").write_text(json.dumps(current), encoding="utf-8")
 
     def test_machine_scoped_reconcile_leaves_other_machines_alone(self):
         self._write_stale("hk")
