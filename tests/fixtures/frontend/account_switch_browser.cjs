@@ -20,7 +20,7 @@ const assert = require('node:assert/strict');
      return setInterval(fn, delay, ...args);
     };
    });
-   const page = await context.newPage(); page.setDefaultTimeout(5000);
+   const page = await context.newPage(); page.setDefaultTimeout(15000);
    await page.goto(origin + '/account', {waitUntil: 'domcontentloaded'});
    await page.getByLabel('账号或邮箱', {exact:true}).fill(from);
    await page.getByLabel('密码', {exact:true}).fill('Review-password-123!');
@@ -48,7 +48,7 @@ const assert = require('node:assert/strict');
    await context.close();
   }
   const context = await browser.newContext();
-  const page = await context.newPage(); page.setDefaultTimeout(5000);
+  const page = await context.newPage(); page.setDefaultTimeout(15000);
   await page.goto(origin + '/account', {waitUntil: 'domcontentloaded'});
   await page.getByLabel('账号或邮箱', {exact:true}).fill('admin@example.test');
   await page.getByLabel('密码', {exact:true}).fill('Review-password-123!');

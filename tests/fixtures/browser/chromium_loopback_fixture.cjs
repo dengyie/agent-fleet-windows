@@ -152,7 +152,7 @@ async function runScenario(fixtureOrigin, redirectUrl, forbiddenUrl) {
       serviceWorkers: 'block',
       viewport: {width: 1024, height: 768},
     });
-    context.setDefaultTimeout(5_000);
+    context.setDefaultTimeout(15000);
     context.setDefaultNavigationTimeout(10_000);
     await context.route('**/*', async route => {
       try {

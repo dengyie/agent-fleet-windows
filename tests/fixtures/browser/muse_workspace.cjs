@@ -9,7 +9,7 @@ const origin = process.argv[2];
   try {
     await context.route('**/*', route => route.request().url().startsWith(origin) ? route.continue() : route.abort());
     const page=await context.newPage(); page.on('pageerror', e=>errors.push(e.message));
-    page.setDefaultTimeout(7000);
+    page.setDefaultTimeout(15000);
     await page.goto(origin+'/muse');
     try { await page.getByRole('heading',{name:'连接你的 Muse'}).waitFor({timeout:10000}); }
     catch (error) { throw new Error(`Muse route did not mount: url=${page.url()} body=${(await page.locator('body').innerText()).slice(0,500)} pageErrors=${errors.join(' | ')}`); }

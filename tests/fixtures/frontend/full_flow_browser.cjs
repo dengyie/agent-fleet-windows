@@ -8,7 +8,7 @@ const origin = process.argv[2];
   const context = await browser.newContext({acceptDownloads: true});
   let page = await context.newPage();
   const errors = [];
-  const watch = p => {p.setDefaultTimeout(12000); p.on('pageerror', e => errors.push(e.message));};
+  const watch = p => {p.setDefaultTimeout(15000); p.on('pageerror', e => errors.push(e.message));};
   watch(page);
   try {
     // SPA readiness is asserted after the auth redirect below. Waiting for

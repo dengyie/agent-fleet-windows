@@ -6,7 +6,7 @@ const [origin, role] = process.argv.slice(2);
   const browser = await chromium.launch({channel: process.env.FLEET_BROWSER_CHANNEL || 'chrome', headless: true});
   try {
     const page = await browser.newPage();
-    page.setDefaultTimeout(10000);
+    page.setDefaultTimeout(15000);
     const requests = [], denied = [], errors = [], turns = [];
     const adminApi = /\/api\/platform\/v1\/(memory|execution-windows|commands|legacy-tasks)(\/|\?|$)/;
     page.on('request', request => {

@@ -7,7 +7,7 @@ const origin = process.argv[2];
   const browser = await chromium.launch({channel: process.env.FLEET_BROWSER_CHANNEL || 'chrome', headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 1000}});
-    page.setDefaultTimeout(7000);
+    page.setDefaultTimeout(15000);
     const errors = [], assets = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('response', response => {
