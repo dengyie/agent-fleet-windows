@@ -6,7 +6,10 @@ const [origin, mailbox, inviteCode] = process.argv.slice(2);
   const browser = await chromium.launch({channel: process.env.FLEET_BROWSER_CHANNEL || 'chrome', headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 390, height: 844}});
-    page.setDefaultTimeout(7000);
+    // CI 2 核满载 + Chrome 冷启动：首个 page.goto 的 domcontentloaded 可能
+    // 超 7s（deb95f2 阻塞门首跑实测一次，此前 8+ run 稳定绿）。预算放大只
+    // 影响等待上限，断言语义不变，成功路径依旧秒级返回。
+    page.setDefaultTimeout(15000);
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin + '/account');
     await page.waitForURL('**/login?**');
