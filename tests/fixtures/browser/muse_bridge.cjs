@@ -25,7 +25,7 @@ const {operate, selectTarget, validateRequest} = require('../../../tools/browser
         document.querySelector('[role=log]').append(message); field.value=''; button.disabled=true;
       });
       </script>`}));
-    const page = await context.newPage(); await page.goto('https://muse.ai/');
+    const page = await context.newPage(); page.setDefaultTimeout(15000); await page.goto('https://muse.ai/');
     const session = await context.newCDPSession(page);
     const call = (method, params) => session.send(method, params);
     const snapshot = await operate(call, {op:'snapshot'}, 'fixture');

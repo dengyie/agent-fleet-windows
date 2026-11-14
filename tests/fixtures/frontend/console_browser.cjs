@@ -7,6 +7,7 @@ const [origin, taskId] = process.argv.slice(2);
   const browser = await chromium.launch({channel: process.env.FLEET_BROWSER_CHANNEL || 'chrome', headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 1000}});
+    page.setDefaultTimeout(15000);
     const errors = [], failedAssets = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('response', response => { if (response.url().includes('/assets/') && response.status() >= 400) failedAssets.push(response.url()); });

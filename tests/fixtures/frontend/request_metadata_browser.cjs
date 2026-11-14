@@ -7,6 +7,7 @@ const [origin, conversation] = process.argv.slice(2);
   let page;
   try {
     page = await browser.newPage({viewport:{width:1440,height:900}});
+    page.setDefaultTimeout(15000);
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     let conversationReads = 0;
     page.on('request', r => {if (r.url().endsWith('/conversations/' + conversation)) conversationReads++;});
