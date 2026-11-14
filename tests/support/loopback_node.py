@@ -53,7 +53,12 @@ class LoopbackNode:
         return self
 
     def __exit__(self, *_):
+        # stopped.set() 时线程可能正阻塞在一次在途 poll 里；测试 server 的
+        # teardown 与这次 poll 竞态（CI 慢盘下 0.05s 轮询间隔撞窗口实测，
+        # 43576631208 [remote] 变体首红），返回 poll_failed 属停止时序而非
+        # 被测行为。记录 set 时刻，只断言此前发生的失败。
+        set_at = len(self.failures)
         self.stopped.set()
         self.thread.join(5)
         assert not self.thread.is_alive()
-        assert not self.failures, self.failures
+        assert not self.failures[:set_at], self.failures[:set_at]
