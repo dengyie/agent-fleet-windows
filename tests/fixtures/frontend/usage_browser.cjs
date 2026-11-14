@@ -14,6 +14,14 @@ const origin = process.argv[2];
     for (const width of [1440, 390]) {
       await page.setViewportSize({width, height: 1000});
       await page.goto(origin + '/usage');
+      // CI 满载下首屏 /api/operator/session 探测可能超客户端 15s 预算，页面
+      // 停在“稍后会自动重试”且产品下次重试要等 60s 计时器（43583515909 实测
+      // fill 30s 等不到表单）。reload 等价重新访问，走同一条
+      // verifyAccess({force:true})；若模块真有 JS 错误，reload 后仍失败、用例保持红。
+      await page.getByLabel('开始日期（UTC）').waitFor({timeout: 20000}).catch(async () => {
+        await page.reload();
+        await page.getByLabel('开始日期（UTC）').waitFor();
+      });
       await page.getByLabel('开始日期（UTC）').fill('2026-10-01');
       await page.getByLabel('结束日期（含当日）').fill('2026-10-02');
       await page.getByLabel('项目筛选').fill('project-a');
