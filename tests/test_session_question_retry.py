@@ -14,5 +14,5 @@ def test_question_retry_and_memory_boundaries(scenario):
         pytest.skip("Node is optional for the production frontend")
     module = (ROOT / "frontend/assets/views/session-questions.js").as_uri()
     result = subprocess.run(["node", str(ROOT / "tests/fixtures/frontend/question_retry.mjs"), module, scenario],
-                            capture_output=True, text=True, timeout=30)
+                            capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr

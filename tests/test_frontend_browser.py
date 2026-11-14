@@ -36,7 +36,7 @@ def test_assistant_workspace_regressions(tmp_path, scenario):
     try:
         result = subprocess.run(['node', str(ROOT / 'tests/fixtures/frontend/workspace_browser.cjs'),
             f'http://127.0.0.1:{server.server_port}', scenario],
-            capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert result.returncode == 0, result.stdout + result.stderr
     finally:
         server.shutdown(); server.server_close(); serving.join(5)
@@ -73,7 +73,7 @@ def test_assistant_auth_in_real_browser(tmp_path):
     serving.start()
     try:
         result = subprocess.run(['node', str(ROOT / 'tests/fixtures/frontend/assistant_auth_browser.cjs'),
-            f'http://127.0.0.1:{server.server_port}'], capture_output=True, text=True, timeout=90)
+            f'http://127.0.0.1:{server.server_port}'], capture_output=True, text=True, encoding="utf-8", timeout=90)
         assert result.returncode == 0, result.stdout + result.stderr
     finally:
         server.shutdown(); server.server_close(); serving.join(5)
@@ -145,7 +145,7 @@ def test_console_in_real_browser(tmp_path):
     try:
         result = subprocess.run(['node', str(ROOT / 'tests/fixtures/frontend/console_browser.cjs'),
             f'http://127.0.0.1:{server.server_port}', task['task_id']],
-            capture_output=True, text=True, timeout=90)
+            capture_output=True, text=True, encoding="utf-8", timeout=90)
         assert result.returncode == 0, result.stdout + result.stderr
     finally:
         stopping.set(); runner.join(5)

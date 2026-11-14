@@ -47,7 +47,11 @@ def test_session_search_in_real_browser(tmp_path):
     try:
         result = subprocess.run(
             ["node", str(ROOT / "tests/fixtures/frontend/session_search_browser.cjs"),
-             f"http://127.0.0.1:{server.server_port}"], capture_output=True, text=True, timeout=65)
+             f"http://127.0.0.1:{server.server_port}"],
+            # node 输出 UTF-8；text=True 无 encoding 按 ANSI 代码页（nt cp1252）
+            # 解码 → _readerthread UnicodeDecodeError → stdout=None →
+            # result.stdout + result.stderr TypeError（43573801219 实测）。
+            capture_output=True, text=True, encoding="utf-8", timeout=65)
         assert result.returncode == 0, result.stdout + result.stderr
     finally:
         server.shutdown()

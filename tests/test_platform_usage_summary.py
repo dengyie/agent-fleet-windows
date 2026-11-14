@@ -283,7 +283,7 @@ def test_usage_summary_in_real_browser(tmp_path):
     serving.start()
     try:
         result = subprocess.run(["node", str(ROOT / "tests/fixtures/frontend/usage_browser.cjs"),
-                                 f"http://127.0.0.1:{server.server_port}"], capture_output=True, text=True, timeout=90)
+                                 f"http://127.0.0.1:{server.server_port}"], capture_output=True, text=True, encoding="utf-8", timeout=90)
         assert result.returncode == 0, result.stdout + result.stderr
     finally:
         server.shutdown(); server.server_close(); serving.join(5)

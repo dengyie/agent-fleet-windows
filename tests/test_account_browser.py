@@ -33,7 +33,7 @@ def test_account_browser(tmp_path):
     thread = Thread(target=server.serve_forever, daemon=True); thread.start()
     try:
         result = subprocess.run(['node', str(ROOT / 'tests/fixtures/frontend/accounts_browser.cjs'), origin, str(mailbox), invite_code],
-                                capture_output=True, text=True, timeout=90)
+                                capture_output=True, text=True, encoding="utf-8", timeout=90)
         assert result.returncode == 0, result.stdout + result.stderr
     finally:
         server.shutdown(); server.server_close(); thread.join(5)
@@ -102,7 +102,7 @@ def test_account_assistant_permissions_and_core_flows(tmp_path, role):
     serving.start(); runner.start()
     try:
         result = subprocess.run(['node', str(ROOT / 'tests/fixtures/frontend/account_assistant_browser.cjs'), origin, role],
-                                capture_output=True, text=True, timeout=60)
+                                capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert result.returncode == 0, result.stdout + result.stderr
     finally:
         stopping.set(); cancelled.set(); runner.join(5)
@@ -129,7 +129,7 @@ def test_account_switch_clears_previous_identity(tmp_path):
     thread = Thread(target=server.serve_forever, daemon=True); thread.start()
     try:
         result = subprocess.run(['node', str(ROOT / 'tests/fixtures/frontend/account_switch_browser.cjs'), origin],
-                                capture_output=True, text=True, timeout=60)
+                                capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert result.returncode == 0, result.stdout + result.stderr
     finally:
         server.shutdown(); server.server_close(); thread.join(5)

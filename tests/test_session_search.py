@@ -428,7 +428,7 @@ assert.throws(() => parseSessionSearch({items:Array(51).fill(row),next_cursor:nu
 """
         result = subprocess.run(["node", "--input-type=module", "-e", script],
                                 env={**os.environ, "SEARCH_CONTRACTS_URL": path.as_uri()},
-                                capture_output=True, text=True, timeout=15)
+                                capture_output=True, text=True, encoding="utf-8", timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 

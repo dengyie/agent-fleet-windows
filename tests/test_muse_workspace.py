@@ -560,7 +560,7 @@ def test_muse_workspace_in_browser(tmp_path):
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     try:
         result = subprocess.run(['node', str(ROOT/'tests/fixtures/browser/muse_workspace.cjs'),
-                                 'http://127.0.0.1:'+str(server.server_port)], capture_output=True, text=True, timeout=90)
+                                 'http://127.0.0.1:'+str(server.server_port)], capture_output=True, text=True, encoding="utf-8", timeout=90)
         assert result.returncode == 0, result.stdout + result.stderr
         assert len(remote.sent) == 2
         assert remote.decisions and remote.decisions[0][1]['decision'] == 'allow_once'

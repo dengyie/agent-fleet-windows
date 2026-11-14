@@ -269,5 +269,5 @@ def test_browser_formatter_matches_server_and_contract_rejects_unknown_state():
       assert.throws(() => parseHandoffPreview({...valid,nonce:'internal'}));
     """
     result = subprocess.run(["node", "--input-type=module", "-e", script], input=json.dumps(cases),
-                            cwd=root, capture_output=True, text=True, timeout=20)
+                            cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=20)
     assert result.returncode == 0, result.stderr

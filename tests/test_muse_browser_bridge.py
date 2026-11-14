@@ -181,7 +181,7 @@ def test_real_chromium_fixed_helper(tmp_path):
     if not module:
         pytest.skip('FLEET_PLAYWRIGHT_MODULE required for Chromium fixture')
     result = subprocess.run(['node', str(Path(__file__).parent / 'fixtures/browser/muse_bridge.cjs')],
-                            capture_output=True, text=True, timeout=40)
+                            capture_output=True, text=True, encoding="utf-8", timeout=40)
     assert result.returncode == 0, result.stderr[-3000:]
     assert '"ok":true' in result.stdout
 
