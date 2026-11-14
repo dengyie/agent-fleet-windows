@@ -31,6 +31,15 @@ from tools.local_process import NO_WINDOW
 logger = logging.getLogger("gateway.run")
 _RELEASE_ROOT = Path(__file__).resolve().parents[1]
 
+def _current_uid() -> int:
+    # Windows 没有 os.getuid；guardian 的属主比对是 /proc 语义（Linux 专属
+    # 部署形态）。nt 上没有 /proc 身份可读，属主校验由 NTFS ACL 承接，
+    # 返回 0 表示"无法区分属主"——与 _proc_identity 返回 None 一起让
+    # 严格比较自然 fail-closed，进程控制仍经 pidfd helper 走固定路径。
+    if os.name == "nt":
+        return 0
+    return os.getuid()
+
 
 def _proc_identity(pid: int) -> tuple[str, str, int] | None:
     """Read bounded identity fields before touching a PID-file process."""
@@ -104,7 +113,7 @@ class AgentFleetGuardian:
         cmdline, cwd, uid = identity
         try:
             expected_cwd = str(self.repo_root.resolve())
-            current_uid = os.getuid()
+            current_uid = _current_uid()
         except (OSError, RuntimeError):
             return False
         return (
@@ -119,7 +128,7 @@ class AgentFleetGuardian:
         if identity is None:
             return None
         cmdline, cwd, uid = identity
-        if uid != os.getuid() or "hub/web.py" not in cmdline:
+        if uid != _current_uid() or "hub/web.py" not in cmdline:
             return None
         try:
             actual = Path(cwd).resolve(strict=True)
@@ -146,7 +155,7 @@ class AgentFleetGuardian:
                 str(helper),
                 str(pid),
                 expected_cwd,
-                str(os.getuid()),
+                str(_current_uid()),
                 "web",
                 "allow_existing",
                 stdout=asyncio.subprocess.PIPE,

@@ -186,6 +186,12 @@ def _make_spool(root, session_id=SESS, **kwargs) -> LocalSpool:
     return LocalSpool(root, MACHINE, session_id, **kwargs)
 
 
+# nt 的 signal 模块无 SIGKILL（POSIX 专属）；产品侧常量均 getattr 默认值，
+# fake 的语义须与产品一致，两平台等价。
+_SIGKILL = getattr(signal, "SIGKILL", 9)
+_SIGTERM = getattr(signal, "SIGTERM", 15)
+
+
 class _FaultProc:
     """Deterministic fake process-group member (no real process)."""
 
@@ -204,11 +210,11 @@ class _FaultProc:
 
     def receive(self, sig):
         self.signals.append(sig)
-        if sig == signal.SIGKILL:
+        if sig == _SIGKILL:
             self.alive = False
             self.alive_unknown = False
             self.exit_code = -(sig)
-        elif sig in (signal.SIGTERM, signal.SIGINT):
+        elif sig in (_SIGTERM, signal.SIGINT):
             if not self.backend.deny_graceful:
                 self.alive = False
                 self.exit_code = -(sig)
@@ -619,8 +625,8 @@ class SupervisorCrashTests(unittest.TestCase):
         self.assertEqual(sstate, "terminated")
         handle = chaos.children[0] if getattr(chaos, "children", None) else None
         # SIGTERM first, then the forced SIGKILL escalation — never silent.
-        self.assertIn(signal.SIGTERM, handle.signals)
-        self.assertIn(signal.SIGKILL, handle.signals)
+        self.assertIn(_SIGTERM, handle.signals)
+        self.assertIn(_SIGKILL, handle.signals)
 
     def test_graceful_terminate_succeeds(self):
         outcome, sstate, chaos = self._make(alive=True, alive_unknown=False,

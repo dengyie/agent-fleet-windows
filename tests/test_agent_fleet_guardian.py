@@ -7,12 +7,12 @@ Tests health checking, restart logic, failure counting, and configuration.
 import asyncio
 import os
 import signal
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hub.agent_fleet_guardian import AgentFleetGuardian, agent_fleet_guardian_watcher
@@ -177,8 +177,12 @@ class TestAgentFleetGuardian(unittest.IsolatedAsyncioTestCase):
         args = create_process.call_args.args
         self.assertEqual(args[1], str(release_helper))
         self.assertEqual(args[2:4], ("12345", str(guardian_module._RELEASE_ROOT)))
-        self.assertEqual(args[4:], (str(os.getuid()), "web", "allow_existing"))
+        self.assertEqual(args[4:], (str(guardian_module._current_uid()), "web", "allow_existing"))
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "symlink creation needs SeCreateSymbolicLinkPrivilege; "
+        "Linux test job covers the sibling-release resolution")
     def test_guardian_accepts_previous_sibling_release_after_live_symlink_switch(self):
         from hub import agent_fleet_guardian as guardian_module
 
@@ -196,7 +200,7 @@ class TestAgentFleetGuardian(unittest.IsolatedAsyncioTestCase):
             with patch("hub.agent_fleet_guardian._proc_identity", return_value=(
                 "python3 hub/web.py --no-serve-frontend",
                 str(old_release),
-                os.getuid(),
+                guardian_module._current_uid(),
             )):
                 self.assertEqual(
                     self.guardian._managed_hub_cwd(12345), str(old_release.resolve())

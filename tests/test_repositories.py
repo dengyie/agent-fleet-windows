@@ -85,7 +85,8 @@ class ObservationRepositoryRegressionTests(unittest.TestCase):
         (root / "mac-local.jsonl").write_text(
             '{"machine": "mac-local", "seq": 1}\n'
             "NOT-JSON\n"
-            '{"machine": "mac-local", "seq": 2}\n'
+            '{"machine": "mac-local", "seq": 2}\n',
+            encoding="utf-8",
         )
         history = repo.read_history("mac-local", 100)
         self.assertEqual(len(history), 2)
@@ -168,7 +169,7 @@ class ScanSkipsInvalidMachineArtifactsTests(unittest.TestCase):
         })
         current = store.read_current(machine)
         current["_ts"] = time.time() - 301
-        (self.temp_dir / f"{machine}.json").write_text(json.dumps(current))
+        (self.temp_dir / f"{machine}.json").write_text(json.dumps(current), encoding="utf-8")
 
     def test_reconcile_ignores_invalid_machine_artifact_and_reconciles_valid(self):
         # A stray malformed current-JSON artifact whose stem is not a valid

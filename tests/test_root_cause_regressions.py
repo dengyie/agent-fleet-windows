@@ -40,8 +40,10 @@ def test_supervisor_command_store_is_private_under_permissive_umask(tmp_path):
         SupervisorCommandRepository(root / "commands.db").init()
     finally:
         os.umask(previous)
-    assert root.stat().st_mode & 0o777 == 0o700
-    assert (root / "commands.db").stat().st_mode & 0o777 == 0o600
+    # POSIX 位在 nt 上是噪声（恒 0o666/0o444），属主语义由 NTFS ACL 承接。
+    if os.name != "nt":
+        assert root.stat().st_mode & 0o777 == 0o700
+        assert (root / "commands.db").stat().st_mode & 0o777 == 0o600
 
 
 def test_deployment_runtime_gate_rejects_missing_muse_transport(monkeypatch):

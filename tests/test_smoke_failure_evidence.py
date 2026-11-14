@@ -2,7 +2,17 @@ import os
 from pathlib import Path
 import subprocess
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
+
+# deploy/e2e-smoke.sh 是 POSIX 产品工件：依赖真实 bash + POSIX mktemp/cp/chmod。
+# Windows runner 的 bash 为存根：text=True 按本地代码页解码脚本的 UTF-8 中文输出
+# （GBK/cp1252 → UnicodeDecodeError），且反斜杠 tmp_path 无法穿过 MSYS 路径语义
+# （evidence 目录建不出来）。Linux test job 完整覆盖这些断言。
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="drives deploy/e2e-smoke.sh (POSIX artifact); Linux test job covers it")
 
 
 def test_failed_smoke_preserves_log_without_runtime_credentials(tmp_path):

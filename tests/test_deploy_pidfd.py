@@ -120,7 +120,7 @@ class AutoDeployPidfdBehaviorTests(unittest.TestCase):
 
         self.assertEqual(
             [call.args for call in send_signal.call_args_list],
-            [(61, control.signal.SIGTERM), (61, control.signal.SIGKILL)],
+            [(61, control._SIGTERM), (61, control._SIGKILL)],
         )
         self.assertEqual([call.args for call in wait.call_args_list], [(61, 0.01), (61, 0.01)])
 
@@ -131,7 +131,7 @@ class AutoDeployPidfdBehaviorTests(unittest.TestCase):
 
         control._stop_pidfd(61, term_timeout=0.01, kill_timeout=0.01)
 
-        send_signal.assert_called_once_with(61, control.signal.SIGTERM)
+        send_signal.assert_called_once_with(61, control._SIGTERM)
         wait.assert_called_once_with(61, 0.01)
 
 

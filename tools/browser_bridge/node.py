@@ -5,6 +5,7 @@ import argparse
 import base64
 import json
 import math
+import os
 from pathlib import Path
 import time
 from urllib.parse import urlsplit
@@ -44,7 +45,9 @@ def load_runtime(path):
     # Command receipts contain task replies; protect both journals before the
     # generic runtime creates its workspace or SQLite files.
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if state.stat().st_mode & 0o077:
+    # POSIX 位校验只在 POSIX 平台有意义：nt 的 st_mode 是噪声（目录恒 0o666，
+    # 私有性由 NTFS ACL 承接），不过滤会让 Windows 节点永远无法启动。
+    if os.name != 'nt' and state.stat().st_mode & 0o077:
         raise ValueError('private_state_directory_required')
     return NodeRuntime(config), interval
 

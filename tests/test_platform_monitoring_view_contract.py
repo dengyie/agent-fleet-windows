@@ -23,7 +23,7 @@ def test_monitoring_view_and_shell_route_keep_read_only_health_surface():
     view = FRONTEND / "assets/views/monitoring.js"
     assert view.is_file()
     source = view.read_text(encoding="utf-8")
-    shell = (FRONTEND / "index.html").read_text(encoding="utf-8") + (FRONTEND / "assets/app.js").read_text()
+    shell = (FRONTEND / "index.html").read_text(encoding="utf-8") + (FRONTEND / "assets/app.js").read_text(encoding="utf-8")
     assert "export function mountMonitoring" in source
     assert "getPlatformServices" in source
     assert "getPlatformService" in source

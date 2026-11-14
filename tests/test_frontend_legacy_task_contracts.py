@@ -8,7 +8,7 @@ VIEW = ROOT / "frontend" / "assets" / "views" / "assistant.js"
 
 
 def test_platform_api_uses_bounded_platform_request_for_legacy_task():
-    source = API.read_text()
+    source = API.read_text(encoding="utf-8")
     assert "createPlatformLegacyTask" in source
     assert "getPlatformLegacyTask" in source
     assert "legacy-task" in source
@@ -19,7 +19,7 @@ def test_platform_api_uses_bounded_platform_request_for_legacy_task():
 
 
 def test_assistant_requires_explicit_legacy_control_and_uses_dom_safe_projection():
-    source = (VIEW.read_text() + (ROOT / 'frontend/assets/views/assistant/panels.js').read_text())
+    source = (VIEW.read_text(encoding="utf-8") + (ROOT / 'frontend/assets/views/assistant/panels.js').read_text(encoding="utf-8"))
     assert "打开旧任务关联" in source
     assert "createPlatformLegacyTask" in source
     assert "getPlatformLegacyTask" in source

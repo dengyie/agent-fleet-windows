@@ -33,6 +33,10 @@ from unittest import mock
 
 from tools.supervisor import supervisor as sup_mod
 
+# 与 3f3804e 同纪律：断言对齐产品常量——nt 上 signal 缺 SIGSTOP，
+# 直接引用 signal.SIGSTOP 会 AttributeError。
+_SIGSTOP = sup_mod._SIGSTOP
+
 
 def _rfc3339() -> str:
     return "2026-08-30T10:00:00Z"
@@ -244,7 +248,12 @@ class AttachTests(unittest.TestCase):
                          "native_file_unreadable")
         self.assertEqual(self.sup.all_status(), {})
 
-        # a real file with no read permission (same user, chmod 000)
+        # a real file with no read permission (same user, chmod 000)。
+        # nt 的 chmod 只清 _FMT 标志位，不移除属主读权（os.access 恒 True，
+        # 同一用户读同一文件语义由 NTFS ACL 承接）——权限拒绝分支仅 POSIX
+        # 验证；missing 分支已两平台等价覆盖。
+        if os.name == "nt":
+            return
         blocked = self.dir / "blocked.jsonl"
         blocked.write_text("x")
         os.chmod(blocked, 0)
@@ -333,8 +342,8 @@ class AttachTests(unittest.TestCase):
         outcome = self.sup.pause_session(self.sid)
         self.assertEqual(outcome, "paused")
         attached = self.ops.attach_calls[0]
-        self.assertEqual(attached.group_signals, [(attached.pgid, signal.SIGSTOP)])
-        self.assertEqual(attached.signals, [signal.SIGSTOP])
+        self.assertEqual(attached.group_signals, [(attached.pgid, _SIGSTOP)])
+        self.assertEqual(attached.signals, [_SIGSTOP])
 
     def test_attach_binds_native_identity_privately_not_in_public_status(self):
         native = self.dir / "rollout-native.jsonl"

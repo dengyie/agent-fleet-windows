@@ -113,7 +113,7 @@ def test_diff_deadline_reaps_child_and_retains_cause(tmp_path: Path, monkeypatch
         worktree.diff_patch(tmp_path)
     assert time.monotonic() - started < 3
     assert isinstance(error.value.__cause__, subprocess.TimeoutExpired)
-    pid = int((tmp_path / "child.pid").read_text())
+    pid = int((tmp_path / "child.pid").read_text(encoding="utf-8"))
     if os.name == "nt":
         # os.kill(pid, 0) 在 Windows 是 TerminateProcess 语义（winerror 87），
         # 不是存活探针；等价验证：SYNCHRONIZE 句柄立即等待即返回已终止。

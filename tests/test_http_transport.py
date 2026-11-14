@@ -20,6 +20,22 @@ from test_provider_transport_boundaries import QuietHandler, REPLY, serve
 from tools.platform.http_transport import open_http
 
 
+class DualStackHTTPServer(ThreadingHTTPServer):
+    """``localhost`` 解析出 [::1, 127.0.0.1]；只绑 IPv4 时 Windows 对未监听
+    的 ::1 connect 是静默黑洞（挂满超时，Linux 是即时 refused），烧光 deadline
+    后连 127.0.0.1 的机会都没有。双栈绑定让两平台语义一致，TLS/SNI 验证
+    语义（证书 CN=localhost）不受影响。"""
+
+    address_family = socket.AF_INET6
+
+    def server_bind(self) -> None:
+        try:
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        except OSError:
+            pass
+        super().server_bind()
+
+
 @contextmanager
 def tls_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, handler: type[QuietHandler], *, trusted: bool = True) -> Iterator[ThreadingHTTPServer]:
     from cryptography.hazmat.primitives import serialization
@@ -32,7 +48,7 @@ def tls_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, handler: type[Qu
     context.load_cert_chain(cert_path, key_path)
     if trusted:
         monkeypatch.setenv('SSL_CERT_FILE', str(cert_path))
-    server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    server = DualStackHTTPServer(('::', 0), handler)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     thread = Thread(target=server.serve_forever, kwargs={'poll_interval': .02}, daemon=True)
     thread.start()

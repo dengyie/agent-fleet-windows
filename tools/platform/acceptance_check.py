@@ -67,7 +67,15 @@ class AccountClient:
             if exc.code == 'acceptance_timeout' and (deadline is None or time.monotonic() < deadline):
                 raise AcceptanceFailure('transport_unknown') from None
             raise
-        except (OSError, URLError, http.client.HTTPException):
+        except (OSError, URLError, http.client.HTTPException) as exc:
+            # connect/read 的 socket 级超时（TimeoutError，含 URLError.reason 内层）
+            # 意味着该次传输把预算花在了真实的 TCP 尝试上——语义就是截止时间
+            # 用尽（acceptance_timeout），而非"传输状态未知"。快速失败（refused/
+            # reset/TLS 拒绝等）仍归 transport_unknown。Timer 精度使最后一毫秒
+            # 的 monotonic 对比不稳定，以失败原因定性而不是贴着 deadline 赌。
+            reason = getattr(exc, 'reason', exc)
+            if isinstance(reason, TimeoutError):
+                raise AcceptanceFailure('acceptance_timeout') from None
             if deadline is not None:
                 remaining(deadline)
             raise AcceptanceFailure('transport_unknown') from None

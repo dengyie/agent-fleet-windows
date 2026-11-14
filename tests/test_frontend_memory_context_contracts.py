@@ -11,7 +11,7 @@ ASSISTANT_VIEW = ROOT / "frontend" / "assets" / "views" / "assistant.js"
 
 class TestMemoryContextApiContractTests:
     def test_platform_api_exposes_bounded_memory_list_and_search(self):
-        source = PLATFORM_API.read_text()
+        source = PLATFORM_API.read_text(encoding="utf-8")
         assert "export async function getPlatformMemories" in source
         assert "export async function searchPlatformMemories" in source
         assert "apiPath('platform', 'v1', 'memory')" in source
@@ -21,7 +21,7 @@ class TestMemoryContextApiContractTests:
         assert "platformRequest(" in source
 
     def test_memory_api_wrappers_do_not_bypass_http_boundary(self):
-        source = PLATFORM_API.read_text()
+        source = PLATFORM_API.read_text(encoding="utf-8")
         for name in ("getPlatformMemories", "searchPlatformMemories"):
             block = re.search(
                 rf"export async function {name}.*?\n}}", source, re.S
@@ -33,7 +33,7 @@ class TestMemoryContextApiContractTests:
 
 class TestAssistantMemoryContextContractTests:
     def test_assistant_renders_picker_states_and_selected_references(self):
-        source = (ASSISTANT_VIEW.read_text() + (ROOT / 'frontend/assets/views/assistant/panels.js').read_text())
+        source = (ASSISTANT_VIEW.read_text(encoding="utf-8") + (ROOT / 'frontend/assets/views/assistant/panels.js').read_text(encoding="utf-8"))
         for value in (
             "getPlatformMemories",
             "searchPlatformMemories",
@@ -54,7 +54,7 @@ class TestAssistantMemoryContextContractTests:
             assert value in source
 
     def test_assistant_memory_context_is_reference_only_and_dom_safe(self):
-        source = (ASSISTANT_VIEW.read_text() + (ROOT / 'frontend/assets/views/assistant/panels.js').read_text())
+        source = (ASSISTANT_VIEW.read_text(encoding="utf-8") + (ROOT / 'frontend/assets/views/assistant/panels.js').read_text(encoding="utf-8"))
         assert "innerHTML" not in source
         assert "fetch(" not in source
         assert "textContent" in source

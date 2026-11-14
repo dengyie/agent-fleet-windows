@@ -162,10 +162,13 @@ def test_node_cli_config_requires_local_consent_and_private_files(tmp_path):
     assert set(runtime.manifest()['capabilities']) == WEB_AGENT_TOOLS
     assert 'credential' not in str(runtime.manifest())
     assert 'workspace.exec' not in runtime.executor.allowed_tools
-    assert (tmp_path / 'state').stat().st_mode & 0o077 == 0
-    (tmp_path / 'state').chmod(0o755)
-    with pytest.raises(ValueError, match='private_state_directory_required'):
-        load_runtime(path)
+    # nt 的 st_mode 是噪声（目录恒 0o666），POSIX 位语义由 NTFS ACL 承接；
+    # 私有性校验（0o077 位检查）仅 POSIX 平台验证。
+    if os.name != 'nt':
+        assert (tmp_path / 'state').stat().st_mode & 0o077 == 0
+        (tmp_path / 'state').chmod(0o755)
+        with pytest.raises(ValueError, match='private_state_directory_required'):
+            load_runtime(path)
 
 
 def test_legacy_unsigned_node_client_cannot_execute_web_agent(tmp_path):

@@ -7,7 +7,7 @@ FRONTEND = ROOT / "frontend"
 
 def test_platform_action_wrappers_are_bounded_and_shell_wired():
     api = (FRONTEND / "assets/api/platform.js").read_text(encoding="utf-8")
-    shell = (FRONTEND / "index.html").read_text(encoding="utf-8") + (FRONTEND / "assets/app.js").read_text()
+    shell = (FRONTEND / "index.html").read_text(encoding="utf-8") + (FRONTEND / "assets/app.js").read_text(encoding="utf-8")
     assert "export async function requestPlatformServiceAction" in api
     assert "export async function getPlatformApproval" in api
     assert "export async function decidePlatformApproval" in api

@@ -35,10 +35,17 @@ def test_both_guardians_probe_real_account_hub_without_credentials(tmp_path):
         guardian = AgentFleetGuardian(repo_root=str(tmp_path), web_port=server.server_port)
         assert asyncio.run(guardian.check_health()) == 200
         # Exercise the deployed shell guardian's actual probe against the same Hub.
-        source = (Path(__file__).resolve().parents[1] / 'deploy/hk-self-report-loop.sh').read_text()
+        # 与产品同源解析 bash：nt 上裸 'bash' 命中 C:\Windows\System32 的 WSL
+        # stub（退出 1、输出 UTF-16 提示），resolve_bash 专避此坑。
+        from tools.local_process import resolve_bash
+        shell = resolve_bash()
+        if shell is None:
+            pytest.skip('no real POSIX shell on this runner; Linux job covers it')
+        source = (Path(__file__).resolve().parents[1] / 'deploy/hk-self-report-loop.sh').read_text(
+            encoding='utf-8')
         start = source.index('health_check() {')
         probe = source[start:source.index('\n}', start) + 2]
-        result = subprocess.run(['bash', '-c', probe + '\nweb_port=$1\nhealth_check',
+        result = subprocess.run([shell, '-c', probe + '\nweb_port=$1\nhealth_check',
             'probe', str(server.server_port)], capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == '200'

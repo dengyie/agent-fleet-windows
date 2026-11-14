@@ -25,9 +25,16 @@ def test_cli_detection_without_session_history(tmp_path, family, command, instal
 
     class Context:
         def run_python(self, script):
+            # nt 的 expanduser 读 USERPROFILE/HOMEDRIVE+HOMEPATH 而非 HOME；
+            # 三者都要指向沙箱，探测脚本才不会看到真实用户目录。
+            home_env = {"HOME": str(tmp_path)}
+            if os.name == "nt":
+                drive, tail = os.path.splitdrive(str(tmp_path))
+                home_env.update({"USERPROFILE": str(tmp_path),
+                                 "HOMEDRIVE": drive, "HOMEPATH": tail})
             result = subprocess.run(
                 [sys.executable, "-c", script], capture_output=True, text=True,
-                env={**os.environ, "HOME": str(tmp_path), "PATH": str(bin_dir)},
+                env={**os.environ, **home_env, "PATH": str(bin_dir)},
                 check=True, timeout=10,
             )
             return result.stdout

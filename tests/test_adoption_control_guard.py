@@ -45,7 +45,7 @@ from test_supervisor_control import (
     _sign,
 )
 
-from tools.supervisor.supervisor import Supervisor, _AttachedHandle
+from tools.supervisor.supervisor import Supervisor, _AttachedHandle, _SIGSTOP
 
 _MACHINE = "agent-a"
 
@@ -235,8 +235,8 @@ class AdoptionControlGuardTests(unittest.TestCase):
         self.assertEqual(receipt["reason"], "paused")
         # the ONE accepted signal for an adopted-valid session: a SIGSTOP to
         # the group, recorded exactly once on the private handle
-        self.assertEqual(handle.group_signals, [signal.SIGSTOP])
-        self.assertEqual(handle.signals, [signal.SIGSTOP])
+        self.assertEqual(handle.group_signals, [_SIGSTOP])
+        self.assertEqual(handle.signals, [_SIGSTOP])
 
     def test_bounded_receipt_never_leaks(self):
         handle = self._adopt()

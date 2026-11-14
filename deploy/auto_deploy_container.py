@@ -14,6 +14,12 @@ import subprocess
 import sys
 import time
 
+# nt 的 signal 模块缺 SIGTERM/SIGKILL（POSIX 专属）；本模块所有进程控制
+# 语义 Linux 专属（_capture_pidfd 已按 sys.platform fail-closed），常量用
+# getattr 保证模块在 Windows 上可导入、测试可 mock 平台后单跑停止逻辑。
+_SIGTERM = getattr(signal, 'SIGTERM', 15)
+_SIGKILL = getattr(signal, 'SIGKILL', 9)
+
 
 def verify_runtime_dependencies():
     """Fail deployment before cutover when the release runtime is incomplete."""
@@ -99,9 +105,9 @@ def _wait_pidfd(pidfd, timeout):
 
 
 def _stop_pidfd(pidfd, term_timeout=8, kill_timeout=3):
-    if not _send_pidfd_signal(pidfd, signal.SIGTERM) or _wait_pidfd(pidfd, term_timeout):
+    if not _send_pidfd_signal(pidfd, _SIGTERM) or _wait_pidfd(pidfd, term_timeout):
         return
-    if not _send_pidfd_signal(pidfd, signal.SIGKILL) or _wait_pidfd(pidfd, kill_timeout):
+    if not _send_pidfd_signal(pidfd, _SIGKILL) or _wait_pidfd(pidfd, kill_timeout):
         return
     raise RuntimeError('process_stop_failed')
 

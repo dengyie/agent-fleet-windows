@@ -30,7 +30,7 @@ class JsonlRotationTests(unittest.TestCase):
             store.save_snapshot("hk", {"machine": "hk", "seq": i, "pad": "x" * 100})
         path = self.temp_dir / "hk.jsonl"
         self.assertLessEqual(path.stat().st_size, 4096 * 2)
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         self.assertLessEqual(len(lines), 200)
         # 最新快照必须保留，且每行可解析
         self.assertEqual(json.loads(lines[-1])["seq"], 199)
@@ -40,7 +40,7 @@ class JsonlRotationTests(unittest.TestCase):
     def test_small_jsonl_is_untouched(self):
         store.save_snapshot("hk", {"machine": "hk", "seq": 0})
         store.save_snapshot("hk", {"machine": "hk", "seq": 1})
-        self.assertEqual(len((self.temp_dir / "hk.jsonl").read_text().splitlines()), 2)
+        self.assertEqual(len((self.temp_dir / "hk.jsonl").read_text(encoding="utf-8").splitlines()), 2)
 
 
 class ScanFilterTests(unittest.TestCase):

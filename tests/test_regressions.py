@@ -40,7 +40,7 @@ class SelfReportTests(unittest.TestCase):
 
         disk = SimpleNamespace(total=1000, used=250, free=750)
         with mock.patch.object(module.platform, "system", return_value="Darwin"), \
-             mock.patch.object(module.os, "getloadavg", return_value=(1.25, 1.0, 0.5)), \
+             mock.patch.object(module.os, "getloadavg", create=True, return_value=(1.25, 1.0, 0.5)), \
              mock.patch.object(module.subprocess, "run", side_effect=fake_run), \
              mock.patch.object(module.shutil, "disk_usage", return_value=disk):
             result = module.collect_system()
