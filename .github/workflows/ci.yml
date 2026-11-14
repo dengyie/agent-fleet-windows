@@ -42,7 +42,6 @@ jobs:
     # 是撞本 job 超时而非 runner 容量回收；Windows 套件含浏览器链路，比 Linux
     # test（15 分钟上限）慢，放宽到 45 分钟。
     timeout-minutes: 45
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
