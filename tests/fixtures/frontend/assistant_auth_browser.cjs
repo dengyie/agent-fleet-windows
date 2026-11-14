@@ -13,7 +13,10 @@ const [origin] = process.argv.slice(2);
       Date.now = () => originalNow() + shift;
       window.advanceFleetTime = amount => { shift += amount; };
     });
-    page.setDefaultTimeout(5000);
+    // CI 2 核满载 + Chrome 冷启动：首个路由 domcontentloaded 可能超 5s（实测
+    // 一次抖动失败，历史 8 个 run 均稳定绿）。预算放大到 15s 只影响等待上限，
+    // 断言语义不变；成功路径依旧秒级返回。
+    page.setDefaultTimeout(15000);
     const errors = [], featureRequests = [], cachedConversationReads = new Map();
     let sessionRequests = 0;
     page.on('pageerror', error => errors.push(error.message));

@@ -69,9 +69,9 @@ class JsonlObservationRepository:
             return False
         keep = lines[-self.keep_lines:]
         tmp = tempfile.NamedTemporaryFile(
-            mode="w", dir=self.state_dir, prefix="rotate-",
-            suffix=".tmp", delete=False,
-        )
+                mode="w", encoding="utf-8", dir=self.state_dir, prefix="rotate-",
+                suffix=".tmp", delete=False,
+            )
         tmp_name = tmp.name
         try:
             with tmp:
@@ -99,13 +99,15 @@ class JsonlObservationRepository:
             self.state_dir.mkdir(parents=True, exist_ok=True)
             snapshot["_ts"] = time.time()
             f = self._mach_file(validated)
-            with open(f, "a") as fh:
+            # 中文内容 + ensure_ascii=False：nt 上缺 encoding 会落到 ANSI
+            # 代码页（cp1252/GBK），写中文快照直接 UnicodeEncodeError。
+            with open(f, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(snapshot, ensure_ascii=False) + "\n")
             self._rotate_if_needed(validated, f)
 
             target = self._mach_file(validated, "json")
             tmp = tempfile.NamedTemporaryFile(
-                mode="w", dir=self.state_dir, prefix="snapshot-",
+                mode="w", encoding="utf-8", dir=self.state_dir, prefix="snapshot-",
                 suffix=".tmp", delete=False,
             )
             tmp_name = tmp.name
